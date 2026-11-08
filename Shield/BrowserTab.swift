@@ -353,6 +353,17 @@ extension BrowserTab: WKNavigationDelegate {
         }
     }
 
+    /// iOS cierra el proceso de la web para liberar memoria (sitios con muchos vídeos/imágenes):
+    /// sin esto la página se queda en blanco, sobre todo al volver atrás.
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        isLoading = false
+        if webView.url != nil {
+            webView.reload()
+        } else if let url {
+            webView.load(URLRequest(url: url))
+        }
+    }
+
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         isLoading = false
     }
