@@ -225,8 +225,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     fileprivate func didReceive(_ message: WKScriptMessage) {
         guard let body = message.body as? [String: Any] else { return }
-        if let hidden = body["hidden"] as? Int {
-            cosmeticBlocked = max(cosmeticBlocked, hidden)
+        if let hidden = body["hidden"] as? Int, hidden > cosmeticBlocked {
+            ShieldStats.add(hidden - cosmeticBlocked)
+            cosmeticBlocked = hidden
         }
         if let url = body["allowPopup"] as? String {
             approvedPopups[url] = Date()
@@ -260,6 +261,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     private func noteBlockedPopup(_ url: URL) {
         popupsBlocked += 1
+        ShieldStats.add(1)
         blockedPopup = url
         popupBannerTask?.cancel()
         popupBannerTask = Task { [weak self] in
@@ -344,6 +346,11 @@ extension BrowserTab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         recordVisit()
+        guard !isPrivate, let url = webView.url else { return }
+        Task {
+            guard let json = try? await webView.evaluateJavaScript(FaviconStore.script) as? String else { return }
+            FaviconStore.shared.update(host: HistoryStore.normalizedHost(url), candidates: FaviconStore.rank(json))
+        }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

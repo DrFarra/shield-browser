@@ -69,7 +69,9 @@ private struct TabCard: View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
                 if tab.isPrivate {
-                    Image(systemName: "eyeglasses").font(.caption).foregroundStyle(.purple)
+                    Image(systemName: "eyeglasses").font(.caption).foregroundStyle(Color.privateTab)
+                } else if let url = tab.url {
+                    SiteIcon(host: HistoryStore.normalizedHost(url), size: 16)
                 }
                 Text(tab.title.isEmpty ? (tab.url?.host() ?? "Nueva pestaña") : tab.title)
                     .font(.caption.weight(.medium))
@@ -99,7 +101,7 @@ private struct TabCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay {
             RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(selected ? Color.orange : Color.primary.opacity(0.08), lineWidth: selected ? 3 : 1)
+                .strokeBorder(selected ? Color.shield : Color.primary.opacity(0.08), lineWidth: selected ? 3 : 1)
         }
         .shadow(color: .black.opacity(0.08), radius: 6, y: 3)
         .contentShape(RoundedRectangle(cornerRadius: 14))
@@ -112,12 +114,12 @@ private struct TabCard: View {
                 Image(uiImage: image).resizable().scaledToFill()
             }
         } else if let url = tab.url {
-            SiteInitial(host: HistoryStore.normalizedHost(url), size: 56)
+            SiteIcon(host: HistoryStore.normalizedHost(url), size: 56)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             Image(systemName: tab.isPrivate ? "eyeglasses" : "shield.lefthalf.filled")
                 .font(.largeTitle)
-                .foregroundStyle(tab.isPrivate ? Color.purple : Color.orange)
+                .foregroundStyle(tab.isPrivate ? Color.privateTab : Color.shield)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }

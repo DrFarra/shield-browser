@@ -138,19 +138,25 @@ struct SuggestionsView: View {
     private func primaryRow(_ q: String) -> some View {
         let address = URLBuilder.address(from: q)
         return HStack(spacing: 12) {
-            Image(systemName: address == nil ? "magnifyingglass" : "globe")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.orange)
-                .frame(width: 32, height: 32)
-                .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+            if let address {
+                SiteIcon(host: HistoryStore.normalizedHost(address))
+            } else {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(Color.shield.gradient, in: RoundedRectangle(cornerRadius: 32 * 0.24, style: .continuous))
+            }
             VStack(alignment: .leading, spacing: 2) {
-                Text(q).lineLimit(1)
+                Text(q).font(.body.weight(.medium)).lineLimit(1)
                 Text(address == nil ? "Buscar en \(ShieldSettings.searchEngine.name)" : "Ir a la página")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
-            Image(systemName: "arrow.up.left").font(.caption).foregroundStyle(.tertiary)
+            Image(systemName: "arrow.forward")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
     }
@@ -163,7 +169,7 @@ struct SiteRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            SiteInitial(host: entry.host)
+            SiteIcon(host: entry.host)
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.displayTitle).lineLimit(1)
                 Text(entry.host).font(.caption).foregroundStyle(.secondary).lineLimit(1)

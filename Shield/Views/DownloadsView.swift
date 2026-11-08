@@ -29,7 +29,7 @@ struct DownloadsView: View {
                                 .tint(.blue)
                             if DownloadManager.canSaveToPhotos(url) {
                                 Button { save(url) } label: { Label("Fotos", systemImage: "photo") }
-                                    .tint(.orange)
+                                    .tint(.shield)
                             }
                         }
                 }
@@ -101,7 +101,7 @@ private struct DownloadRow: View {
             }
             switch item.state {
             case .running:
-                ProgressView(value: item.progress).tint(.orange)
+                ProgressView(value: item.progress).tint(.shield)
             case .failed(let reason):
                 Text(reason).font(.caption).foregroundStyle(.red)
             case .finished:
@@ -119,7 +119,7 @@ private struct FileRow: View {
         HStack(spacing: 12) {
             Image(systemName: DownloadManager.isImage(url) ? "photo" :
                     (DownloadManager.isVideo(url) || url.pathExtension.lowercased() == "ts") ? "film" : "doc")
-                .foregroundStyle(.orange)
+                .foregroundStyle(Color.shield)
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(url.lastPathComponent).lineLimit(1)

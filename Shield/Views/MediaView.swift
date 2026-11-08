@@ -32,7 +32,7 @@ struct MediaView: View {
                                 Spacer()
                                 if item.kind == .video {
                                     Button { play(item) } label: {
-                                        Image(systemName: "play.circle.fill").font(.title2).foregroundStyle(.orange)
+                                        Image(systemName: "play.circle.fill").font(.title2).foregroundStyle(Color.shield)
                                     }
                                     .buttonStyle(.borderless)
                                 }
@@ -51,7 +51,7 @@ struct MediaView: View {
                                         .overlay(alignment: .bottomTrailing) {
                                             Image(systemName: started.contains(item.id) ? "checkmark.circle.fill" : "arrow.down.circle.fill")
                                                 .font(.title3)
-                                                .foregroundStyle(.white, started.contains(item.id) ? Color.green : Color.orange)
+                                                .foregroundStyle(.white, started.contains(item.id) ? Color.green : Color.shield)
                                                 .padding(4)
                                         }
                                 }
@@ -86,7 +86,7 @@ struct MediaView: View {
         Button { start(item) } label: {
             Image(systemName: started.contains(item.id) ? "checkmark.circle.fill" : "arrow.down.circle.fill")
                 .font(.title2)
-                .foregroundStyle(started.contains(item.id) ? Color.green : Color.orange)
+                .foregroundStyle(started.contains(item.id) ? Color.green : Color.shield)
         }
         .buttonStyle(.borderless)
     }
@@ -115,17 +115,17 @@ private struct Thumbnail: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12))
+            RoundedRectangle(cornerRadius: 8).fill(Color.shield.opacity(0.12))
             if let url {
                 AsyncImage(url: url) { phase in
                     if let image = phase.image {
                         image.resizable().scaledToFill()
                     } else {
-                        Image(systemName: icon).foregroundStyle(.orange)
+                        Image(systemName: icon).foregroundStyle(Color.shield)
                     }
                 }
             } else {
-                Image(systemName: icon).foregroundStyle(.orange)
+                Image(systemName: icon).foregroundStyle(Color.shield)
             }
         }
         .frame(width: size, height: size)

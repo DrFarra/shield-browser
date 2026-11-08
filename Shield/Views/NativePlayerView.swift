@@ -44,7 +44,7 @@ struct NativePlayerView: View {
                 Button { startDownload() } label: {
                     Image(systemName: downloadStarted ? "checkmark.circle.fill" : "arrow.down.circle.fill")
                         .font(.title2)
-                        .foregroundStyle(downloadStarted ? Color.green : Color.orange)
+                        .foregroundStyle(downloadStarted ? Color.green : Color.shield)
                 }
                 .disabled(downloadStarted)
             }
@@ -63,7 +63,7 @@ struct NativePlayerView: View {
                         Image(systemName: "exclamationmark.triangle").font(.largeTitle)
                         Text(failure).multilineTextAlignment(.center)
                         Button("Descargar de todos modos") { startDownload() }
-                            .buttonStyle(.borderedProminent).tint(.orange)
+                            .buttonStyle(.borderedProminent).tint(.shield)
                     }
                     .foregroundStyle(.white)
                     .padding()

@@ -74,6 +74,17 @@ enum ShieldSettings {
     }
 }
 
+/// Total acumulado de pop-ups y anuncios eliminados en las páginas (para la página de inicio).
+enum ShieldStats {
+    static let totalKey = "totalBlocked"
+
+    static func add(_ count: Int) {
+        guard count > 0 else { return }
+        let defaults = UserDefaults.standard
+        defaults.set(defaults.integer(forKey: totalKey) + count, forKey: totalKey)
+    }
+}
+
 enum URLBuilder {
     /// Convierte lo escrito en la barra en una URL: dirección directa o búsqueda.
     static func url(from input: String) -> URL? {

@@ -24,7 +24,7 @@ struct BookmarksView: View {
                             Label("Eliminar", systemImage: "trash")
                         }
                         Button { editing = bookmark } label: { Label("Editar", systemImage: "pencil") }
-                            .tint(.orange)
+                            .tint(.shield)
                     }
                     .contextMenu { BookmarkMenu(bookmark: bookmark, editing: $editing, onOpen: onOpen) }
                 }
@@ -75,7 +75,7 @@ private struct BookmarkRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            SiteInitial(host: bookmark.host)
+            SiteIcon(host: bookmark.host)
             VStack(alignment: .leading, spacing: 2) {
                 Text(bookmark.title).lineLimit(1)
                 Text(bookmark.host).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -83,20 +83,6 @@ private struct BookmarkRow: View {
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
-    }
-}
-
-/// Inicial del sitio en un cuadrado naranja (no se descargan favicons: menos rastreo).
-struct SiteInitial: View {
-    let host: String
-    var size: CGFloat = 32
-
-    var body: some View {
-        Text(String(host.prefix(1)).uppercased())
-            .font(size > 40 ? .title2.bold() : .subheadline.bold())
-            .foregroundStyle(.orange)
-            .frame(width: size, height: size)
-            .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: size * 0.25))
     }
 }
 
