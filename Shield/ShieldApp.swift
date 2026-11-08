@@ -5,6 +5,7 @@ import SwiftUI
 struct ShieldApp: App {
     @StateObject private var blocker = ContentBlocker.shared
     @StateObject private var tabs = TabManager()
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         // Sonido aunque el iPhone esté en silencio, y Picture in Picture
@@ -17,6 +18,12 @@ struct ShieldApp: App {
                 .environmentObject(blocker)
                 .environmentObject(tabs)
                 .task { await blocker.load() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background {
+                tabs.saveSession()
+                HistoryStore.shared.flush()
+            }
         }
     }
 }

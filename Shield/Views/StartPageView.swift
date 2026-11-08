@@ -2,20 +2,10 @@ import SwiftUI
 
 struct StartPageView: View {
     let isPrivate: Bool
-    let open: (String) -> Void
+    let open: (URL, _ newTab: Bool) -> Void
     @EnvironmentObject private var blocker: ContentBlocker
-
-    private struct Favorite: Identifiable {
-        let name: String, host: String
-        var id: String { host }
-    }
-
-    private let favorites = [
-        Favorite(name: "YouTube", host: "m.youtube.com"), Favorite(name: "Wikipedia", host: "es.wikipedia.org"),
-        Favorite(name: "Marca", host: "marca.com"), Favorite(name: "El País", host: "elpais.com"),
-        Favorite(name: "Reddit", host: "reddit.com"), Favorite(name: "X", host: "x.com"),
-        Favorite(name: "Amazon", host: "amazon.es"), Favorite(name: "GitHub", host: "github.com"),
-    ]
+    @ObservedObject private var store = BookmarkStore.shared
+    @State private var editing: Bookmark?
 
     var body: some View {
         ScrollView {
@@ -35,29 +25,45 @@ struct StartPageView: View {
                 }
                 .padding(.top, 60)
 
-                HStack(spacing: 6) {
-                    if !blocker.isReady { ProgressView() }
-                    Text(blocker.status).font(.footnote).foregroundStyle(.secondary)
-                }
-
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 18) {
-                    ForEach(favorites) { fav in
-                        Button { open(fav.host) } label: {
-                            VStack(spacing: 6) {
-                                Text(String(fav.name.prefix(1)))
-                                    .font(.title2.bold())
-                                    .frame(width: 56, height: 56)
-                                    .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
-                                Text(fav.name).font(.caption).lineLimit(1)
-                            }
-                        }
-                        .buttonStyle(.plain)
+                if !blocker.isReady {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                        Text(blocker.status).font(.footnote).foregroundStyle(.secondary)
                     }
                 }
-                .padding(.horizontal)
+
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Favoritos").font(.title3.bold())
+                    if store.bookmarks.isEmpty {
+                        Text("Abre una página y toca ⋯ → Añadir a favoritos para tenerla aquí.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 18) {
+                            ForEach(store.bookmarks) { bookmark in
+                                Button { open(bookmark.url, false) } label: {
+                                    VStack(spacing: 6) {
+                                        SiteInitial(host: bookmark.host, size: 58)
+                                        Text(bookmark.title)
+                                            .font(.caption)
+                                            .lineLimit(1)
+                                            .foregroundStyle(.primary)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.plain)
+                                .contextMenu { BookmarkMenu(bookmark: bookmark, editing: $editing, onOpen: open) }
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
             }
             .frame(maxWidth: .infinity)
+            .padding(.bottom, 24)
         }
         .background(isPrivate ? Color.purple.opacity(0.08) : Color(.systemBackground))
+        .sheet(item: $editing) { BookmarkEditor(bookmark: $0) }
     }
 }

@@ -19,6 +19,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @Published var blockedPopup: URL?
     @Published var popupsBlocked = 0
     @Published var nativeVideo: NativeVideo?
+    /// Miniatura para la vista de pestañas.
+    @Published var snapshot: UIImage?
+    /// Pedir la versión de escritorio de las páginas en esta pestaña.
+    @Published private(set) var desktopMode = false
 
     /// Lo asigna TabManager para abrir ventanas nuevas como pestañas.
     var onOpenInNewTab: ((URLRequest) -> Void)?
@@ -32,6 +36,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private var popupBannerTask: Task<Void, Never>?
     /// Sólo shield.js la conoce (la borra de window antes de que corran los scripts de la web).
     private let linkToken = UUID().uuidString
+    /// Pestaña restaurada al abrir la app: se carga cuando se muestra por primera vez.
+    private var pendingRestore: SavedTab?
 
     init(isPrivate: Bool) {
         self.isPrivate = isPrivate
@@ -51,6 +57,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         webView.allowsBackForwardNavigationGestures = true
         webView.isInspectable = true
         webView.scrollView.keyboardDismissMode = .interactive
+        webView.isFindInteractionEnabled = true
         config.userContentController.add(ScriptMessageProxy(self), name: "shield")
 
         let refresh = UIRefreshControl()
@@ -85,6 +92,50 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     func goBack() { webView.goBack() }
     func goForward() { webView.goForward() }
     func stop() { webView.stopLoading() }
+
+    func toggleDesktopMode() {
+        desktopMode.toggle()
+        reload()   // la nueva preferencia se aplica al decidir la navegación
+    }
+
+    func findInPage() {
+        webView.findInteraction?.presentFindNavigator(showingReplace: false)
+    }
+
+    func captureSnapshot() {
+        guard webView.url != nil else { snapshot = nil; return }
+        let config = WKSnapshotConfiguration()
+        config.snapshotWidth = 360
+        Task {
+            if let image = try? await webView.takeSnapshot(configuration: config) { snapshot = image }
+        }
+    }
+
+    // MARK: - Sesión
+
+    /// Estado para volver a abrir la pestaña (con su historial atrás/adelante).
+    var saved: SavedTab? {
+        if let pendingRestore { return pendingRestore }
+        guard let url = webView.url else { return nil }
+        return SavedTab(url: url, title: title, state: webView.interactionState as? Data)
+    }
+
+    func restore(_ tab: SavedTab) {
+        pendingRestore = tab
+        url = tab.url
+        title = tab.title
+    }
+
+    func restoreIfNeeded() {
+        guard let tab = pendingRestore else { return }
+        pendingRestore = nil
+        applyShields(for: tab.url.host())
+        if let state = tab.state {
+            webView.interactionState = state
+        } else {
+            webView.load(URLRequest(url: tab.url))
+        }
+    }
 
     @objc private func pullToRefresh(_ sender: UIRefreshControl) {
         reload()
@@ -248,20 +299,22 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 // MARK: - WKNavigationDelegate
 
 extension BrowserTab: WKNavigationDelegate {
-    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
-        guard let url = navigationAction.request.url else { return .cancel }
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                 preferences: WKWebpagePreferences) async -> (WKNavigationActionPolicy, WKWebpagePreferences) {
+        preferences.preferredContentMode = desktopMode ? .desktop : .mobile
+        guard let url = navigationAction.request.url else { return (.cancel, preferences) }
         let scheme = url.scheme?.lowercased() ?? ""
         if ["http", "https", "about", "data", "blob", "file"].contains(scheme) {
             if navigationAction.targetFrame?.isMainFrame ?? true {
                 applyShields(for: url.host())
             }
-            return .allow
+            return (.allow, preferences)
         }
         // tel:, mailto:, maps:, itms-apps: … → abrir con la app del sistema
         if navigationAction.navigationType == .linkActivated {
             _ = await UIApplication.shared.open(url)
         }
-        return .cancel
+        return (.cancel, preferences)
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {

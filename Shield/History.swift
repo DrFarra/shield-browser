@@ -24,19 +24,13 @@ final class HistoryStore: ObservableObject {
     /// De la visita más reciente a la más antigua.
     @Published private(set) var entries: [HistoryEntry] = []
 
-    private let fileURL: URL
+    private static let file = "history.json"
     private let limit = 5000
     private var saveTask: Task<Void, Never>?
     private var rankedHosts: [String]?
 
     private init() {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        fileURL = dir.appendingPathComponent("history.json")
-        if let data = try? Data(contentsOf: fileURL),
-           let saved = try? JSONDecoder().decode([HistoryEntry].self, from: data) {
-            entries = saved
-        }
+        entries = Storage.load([HistoryEntry].self, from: Self.file) ?? []
     }
 
     nonisolated static func normalizedHost(_ url: URL) -> String {
@@ -84,12 +78,18 @@ final class HistoryStore: ObservableObject {
         rankedHosts = nil
         saveTask?.cancel()
         let snapshot = entries
-        let fileURL = fileURL
+        let file = Self.file
         saveTask = Task.detached(priority: .utility) {
             try? await Task.sleep(nanoseconds: 600_000_000)   // agrupa varias escrituras seguidas
-            guard !Task.isCancelled, let data = try? JSONEncoder().encode(snapshot) else { return }
-            try? data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+            guard !Task.isCancelled else { return }
+            Storage.save(snapshot, to: file)
         }
+    }
+
+    /// Al pasar a segundo plano: guardar ya, sin esperar.
+    func flush() {
+        saveTask?.cancel()
+        Storage.save(entries, to: Self.file)
     }
 
     // MARK: - Sugerencias

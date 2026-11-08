@@ -163,11 +163,7 @@ struct SiteRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Text(String(entry.host.prefix(1)).uppercased())
-                .font(.subheadline.bold())
-                .foregroundStyle(.orange)
-                .frame(width: 32, height: 32)
-                .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+            SiteInitial(host: entry.host)
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.displayTitle).lineLimit(1)
                 Text(entry.host).font(.caption).foregroundStyle(.secondary).lineLimit(1)

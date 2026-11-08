@@ -24,7 +24,10 @@ private struct TabContent: View {
     @State private var showMedia = false
     @State private var showDownloads = false
     @State private var showHistory = false
+    @State private var showBookmarks = false
+    @State private var editingBookmark: Bookmark?
     @ObservedObject private var downloads = DownloadManager.shared
+    @ObservedObject private var bookmarks = BookmarkStore.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -34,7 +37,7 @@ private struct TabContent: View {
                     .ignoresSafeArea(edges: .top)
                     .opacity(tab.url == nil ? 0 : 1)
                 if tab.url == nil {
-                    StartPageView(isPrivate: tab.isPrivate) { tab.load($0) }
+                    StartPageView(isPrivate: tab.isPrivate) { openURL($0, newTab: $1) }
                 }
                 if tab.isLoading {
                     ProgressView(value: tab.progress)
@@ -65,13 +68,21 @@ private struct TabContent: View {
             }
         }
         .sheet(isPresented: $showDownloads) { NavigationStack { DownloadsView() } }
-        .sheet(isPresented: $showHistory) {
-            HistoryView { url, newTab in
-                if newTab { tabs.newTab(request: URLRequest(url: url)) } else { tab.load(url.absoluteString) }
-            }
-        }
+        .sheet(isPresented: $showHistory) { HistoryView { openURL($0, newTab: $1) } }
+        .sheet(isPresented: $showBookmarks) { BookmarksView { openURL($0, newTab: $1) } }
+        .sheet(item: $editingBookmark) { BookmarkEditor(bookmark: $0) }
         .sheet(isPresented: $showShieldPanel) {
             ShieldPanel(tab: tab).presentationDetents([.medium])
+        }
+        .onAppear { tab.restoreIfNeeded() }
+    }
+
+    /// Favoritos, historial y página de inicio: en esta pestaña o en una nueva.
+    private func openURL(_ url: URL, newTab: Bool) {
+        if newTab {
+            tabs.newTab(isPrivate: tab.isPrivate, request: URLRequest(url: url))
+        } else {
+            tab.load(url.absoluteString)
         }
     }
 
@@ -148,7 +159,10 @@ private struct TabContent: View {
                     }
                     .disabled(tab.url == nil)
                     .accessibilityLabel("Descargar vídeos e imágenes")
-                    Button { showTabs = true } label: {
+                    Button {
+                        tab.captureSnapshot()
+                        showTabs = true
+                    } label: {
                         Text("\(tabs.tabs.count)")
                             .font(.footnote.bold())
                             .frame(width: 24, height: 24)
@@ -160,20 +174,41 @@ private struct TabContent: View {
                         Button { tabs.newTab(isPrivate: true) } label: {
                             Label("Nueva pestaña privada", systemImage: "eyeglasses")
                         }
-                        Divider()
                         if let url = tab.url {
-                            ShareLink(item: url) { Label("Compartir", systemImage: "square.and.arrow.up") }
+                            Section {
+                                if bookmarks.contains(url) {
+                                    Button { bookmarks.remove(url: url) } label: {
+                                        Label("Quitar de favoritos", systemImage: "star.slash")
+                                    }
+                                } else {
+                                    Button {
+                                        editingBookmark = Bookmark(title: tab.title.isEmpty ? (url.host() ?? "") : tab.title, url: url)
+                                    } label: {
+                                        Label("Añadir a favoritos", systemImage: "star")
+                                    }
+                                }
+                                Button { tab.findInPage() } label: {
+                                    Label("Buscar en la página", systemImage: "doc.text.magnifyingglass")
+                                }
+                                Button { tab.toggleDesktopMode() } label: {
+                                    Label(tab.desktopMode ? "Ver versión móvil" : "Ver versión de escritorio",
+                                          systemImage: tab.desktopMode ? "iphone" : "desktopcomputer")
+                                }
+                                ShareLink(item: url) { Label("Compartir", systemImage: "square.and.arrow.up") }
+                            }
                         }
-                        Button { showHistory = true } label: {
-                            Label("Historial", systemImage: "clock")
+                        Section {
+                            Button { showBookmarks = true } label: { Label("Favoritos", systemImage: "book") }
+                            Button { showHistory = true } label: { Label("Historial", systemImage: "clock") }
+                            Button { showDownloads = true } label: {
+                                Label("Descargas", systemImage: "tray.and.arrow.down")
+                            }
+                            Button { showSettings = true } label: { Label("Ajustes", systemImage: "gearshape") }
                         }
-                        Button { showDownloads = true } label: {
-                            Label("Descargas", systemImage: "tray.and.arrow.down")
-                        }
-                        Button { showSettings = true } label: { Label("Ajustes", systemImage: "gearshape") }
                     } label: {
                         Image(systemName: "ellipsis.circle").frame(maxWidth: .infinity)
                     }
+                    .menuOrder(.fixed)
                 }
                 .font(.title3)
             }
