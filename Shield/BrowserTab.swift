@@ -27,6 +27,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private var appliedShields: Bool?
     private var approvedPopups: [String: Date] = [:]
     private var popupBannerTask: Task<Void, Never>?
+    /// Sólo shield.js la conoce (la borra de window antes de que corran los scripts de la web).
+    private let linkToken = UUID().uuidString
 
     init(isPrivate: Bool) {
         self.isPrivate = isPrivate
@@ -96,7 +98,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         controller.removeAllUserScripts()
         if enabled {
             for list in ContentBlocker.shared.ruleLists { controller.add(list) }
-            let flag = "window.__shieldNativePlayer = \(ShieldSettings.nativePlayer);"
+            let flag = "window.__shieldNativePlayer = \(ShieldSettings.nativePlayer); window.__shieldToken = '\(linkToken)';"
             controller.addUserScript(WKUserScript(source: flag, injectionTime: .atDocumentStart,
                                                   forMainFrameOnly: false))
             controller.addUserScript(ContentBlocker.shared.userScript)
@@ -151,6 +153,15 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         }
         if let url = (body["popupBlocked"] as? String).flatMap({ URL(string: $0) }) {
             noteBlockedPopup(url)
+        }
+        if let link = body["openLink"] as? String, body["token"] as? String == linkToken,
+           let url = URL(string: link), ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+            if body["newTab"] as? Bool == true {
+                onOpenInNewTab?(URLRequest(url: url))
+            } else if message.frameInfo.isMainFrame {
+                applyShields(for: url.host())
+                webView.load(URLRequest(url: url))
+            }
         }
         if let video = NativeVideo(body) {
             nativeVideo = video

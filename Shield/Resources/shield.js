@@ -4,6 +4,9 @@
 (function () {
   if (window.__shieldInjected) return;
   window.__shieldInjected = true;
+  // Clave que pone la app para que sólo este script pueda pedirle abrir enlaces.
+  var token = window.__shieldToken || '';
+  try { delete window.__shieldToken; } catch (e) {}
 
   var removed = 0;
   function report() {
@@ -44,7 +47,17 @@
   function onTap(e) {
     var t = e.touches && e.touches[0] ? e.touches[0] : e;
     var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
-    lastTap = { target: e.target, link: a ? a.href : null, x: t.clientX, y: t.clientY, time: Date.now() };
+    var real = a && !/^(javascript:|#)/i.test(a.getAttribute('href') || '');
+    lastTap = { target: e.target, link: real ? a.href : null, x: t.clientX, y: t.clientY, time: Date.now() };
+    // Sin "playsinline" el iPhone abre el vídeo de la web a pantalla completa
+    // por encima del reproductor nativo.
+    if (window.__shieldNativePlayer) {
+      var vids = document.querySelectorAll('video:not([playsinline])');
+      for (var i = 0; i < vids.length; i++) {
+        vids[i].setAttribute('playsinline', '');
+        vids[i].setAttribute('webkit-playsinline', '');
+      }
+    }
   }
   window.addEventListener('touchstart', onTap, { capture: true, passive: true });
   window.addEventListener('pointerdown', onTap, true);
@@ -94,6 +107,10 @@
 
   function popupAllowed(url) {
     if (!url || url === 'about:blank') return false;
+    // Pop-under: abrir la propia página en otra pestaña, o una URL distinta
+    // del enlace que el usuario acaba de tocar.
+    if (url.split('#')[0] === location.href.split('#')[0]) return false;
+    if (recentTap() && lastTap.link && lastTap.link !== url) return false;
     if (sameSite(url)) return true;
     // enlace externo que el usuario tocó de verdad (y no es una capa invisible)
     return recentTap() && lastTap.link === url && !!lastTap.target && !!lastTap.target.closest &&
@@ -154,7 +171,17 @@
       blockPopup(a.href);
       return;
     }
-    if (blankAnchor(a)) post({ allowPopup: a.href });
+    // Enlace externo tocado de verdad: lo abre la app, así los scripts de
+    // anuncios no pueden cancelarlo, recargar la página ni cambiarlo por otro.
+    var newTab = blankAnchor(a);
+    if (e.isTrusted && /^https?:/i.test(a.href) && !sameSite(a.href) && !a.hasAttribute('download') &&
+        (newTab || window === window.top)) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      post({ openLink: a.href, newTab: newTab, token: token });
+      return;
+    }
+    if (newTab) post({ allowPopup: a.href });
   }, true);
 
   // ---------- Capas flotantes insertadas por scripts de anuncios ----------
@@ -274,6 +301,7 @@
   var IMAGE_EXT = /\.(jpe?g|png|gif|webp|avif|heic|bmp)(\?|#|$)/i;
   var seen = {};
   var lastHLS = null;   // última lista .m3u8 vista en este frame (reproductores hls.js)
+  var hlsMaster = null; // última lista maestra: incluye la pista de audio (las variantes a veces no)
   var queue = [];
   var flushTimer = null;
   function addMedia(kind, url, extra) {
@@ -354,8 +382,18 @@
       try { window.frames[i].postMessage({ __shieldNative: !!on }, '*'); } catch (e) {}
     }
   };
+  // Vídeos de la web "retenidos" mientras se ve el reproductor nativo: en
+  // silencio y pausados aunque su reproductor JS intente volver a darles play.
+  var held = [];
+  window.__shieldRelease = function () {
+    held.splice(0).forEach(function (v) { v.muted = v.__shieldHeld.muted; v.__shieldHeld = null; });
+    for (var i = 0; i < window.frames.length; i++) {
+      try { window.frames[i].postMessage({ __shieldRelease: 1 }, '*'); } catch (e) {}
+    }
+  };
   window.addEventListener('message', function (e) {
     if (e.data && typeof e.data.__shieldNative === 'boolean') window.__shieldSetNative(e.data.__shieldNative);
+    if (e.data && e.data.__shieldRelease) window.__shieldRelease();
   });
   function playableSource(v) {
     var src = v.currentSrc || v.src || '';
@@ -363,19 +401,27 @@
       var s = v.querySelector('source[src]');
       src = s ? abs(s.getAttribute('src')) : '';
     }
-    if (!src || /^blob:/i.test(src)) src = lastHLS || '';   // hls.js / MSE
+    if (!src || /^blob:/i.test(src)) src = hlsMaster || lastHLS || '';   // hls.js / MSE
     return /^https?:/i.test(src) ? src : '';
   }
   document.addEventListener('play', function (e) {
     var v = e.target;
-    if (!window.__shieldNativePlayer || !v || v.tagName !== 'VIDEO') return;
+    if (!v || v.tagName !== 'VIDEO') return;
+    if (v.__shieldHeld) { v.pause(); return; }
+    if (!window.__shieldNativePlayer) return;
     if (!recentTap()) return;               // sólo si lo pidió el usuario (no autoplay)
     var src = playableSource(v);
     if (!src) return;                       // sin URL utilizable: se queda el de la web
+    v.__shieldHeld = { muted: v.muted };
+    held.push(v);
+    v.muted = true;
     v.pause();
+    try { if (v.webkitDisplayingFullscreen) v.webkitExitFullscreen(); } catch (err) {}
+    try { if (document.webkitFullscreenElement) document.webkitExitFullscreen(); } catch (err) {}
     lastTap.time = 0;
     post({ nativePlay: src, poster: v.poster ? abs(v.poster) : null, page: location.href,
-           time: v.currentTime || 0, title: document.title || '', hls: /\.m3u8(\?|#|$)/i.test(src) || src === lastHLS });
+           time: v.currentTime || 0, title: document.title || '',
+           hls: /\.m3u8(\?|#|$)/i.test(src) || src === lastHLS || src === hlsMaster });
   }, true);
   window.addEventListener('message', function (e) {
     if (e.data && e.data.__shieldScan) scan();
@@ -390,12 +436,20 @@
     if (type && /mpegurl/i.test(type)) addMedia('video', url, { hls: true });
     else if (type && /^video\//i.test(type)) addMedia('video', url);
   }
+  function isHLS(url, type) { return /mpegurl/i.test(type || '') || /\.m3u8(\?|#|$)/i.test(url); }
+  function checkMaster(url, text) {
+    if (/#EXT-X-STREAM-INF/.test(text || '')) { hlsMaster = url; addMedia('video', url, { hls: true }); }
+  }
   var nativeXHROpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function (method, url) {
     var xhr = this;
     try {
       xhr.addEventListener('load', function () {
-        try { checkType(abs(url), xhr.getResponseHeader('content-type')); } catch (e) {}
+        try {
+          var u = abs(url), type = xhr.getResponseHeader('content-type');
+          checkType(u, type);
+          if (isHLS(u, type) && (xhr.responseType === '' || xhr.responseType === 'text')) checkMaster(u, xhr.responseText);
+        } catch (e) {}
       });
     } catch (e) {}
     return nativeXHROpen.apply(this, arguments);
@@ -405,7 +459,11 @@
     window.fetch = function (input) {
       var p = nativeFetch.apply(this, arguments);
       p.then(function (res) {
-        try { checkType(res.url, res.headers.get('content-type')); } catch (e) {}
+        try {
+          var type = res.headers.get('content-type');
+          checkType(res.url, type);
+          if (isHLS(res.url, type)) res.clone().text().then(function (t) { checkMaster(res.url, t); }, function () {});
+        } catch (e) {}
       }, function () {});
       return p;
     };

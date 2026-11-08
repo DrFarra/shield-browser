@@ -80,7 +80,12 @@ struct NativePlayerView: View {
         }
         .background(Color.black.ignoresSafeArea())
         .task { await load() }
-        .onDisappear { player?.pause() }
+        .onDisappear {
+            player?.pause()
+            // Devuelve el sonido al vídeo de la web y deja de forzar la pausa.
+            webView.evaluateJavaScript("window.__shieldRelease && window.__shieldRelease(); 0",
+                                       completionHandler: nil)
+        }
     }
 
     private func startDownload() {
@@ -113,6 +118,10 @@ struct NativePlayerView: View {
         if video.startTime > 1 {
             _ = await newPlayer.seek(to: CMTime(seconds: video.startTime, preferredTimescale: 600))
         }
+        // La web puede haber desactivado la sesión de audio al pausar su vídeo.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        newPlayer.isMuted = false
         player = newPlayer
         newPlayer.play()
     }
