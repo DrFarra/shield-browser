@@ -18,6 +18,7 @@ struct ShieldApp: App {
                 .environmentObject(blocker)
                 .environmentObject(tabs)
                 .task { await blocker.load() }
+                .task { await DemoMode.run(tabs) }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background {

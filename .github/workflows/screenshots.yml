@@ -1,0 +1,40 @@
+name: Screenshots
+
+# Capturas de todas las pantallas en el simulador, para revisar el diseño sin Mac.
+on:
+  workflow_dispatch:
+
+jobs:
+  screenshots:
+    runs-on: xcode-27
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descargar y convertir listas de filtros
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet soupsieve beautifulsoup4 pillow
+          .venv/bin/python tools/convert_filters.py
+          .venv/bin/python tools/make_icon.py
+
+      - name: Generar proyecto Xcode
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Compilar para el simulador
+        run: |
+          xcodebuild -project Shield.xcodeproj -target Shield -configuration Debug \
+            -sdk iphonesimulator ARCHS=arm64 ONLY_ACTIVE_ARCH=NO SYMROOT="$PWD/build" \
+            CODE_SIGNING_ALLOWED=NO build | tee build.log | grep -E "error:|BUILD" || true
+          test -d build/Debug-iphonesimulator/Shield.app
+
+      - name: Capturas
+        run: bash tools/screenshots.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots
+          path: screenshots

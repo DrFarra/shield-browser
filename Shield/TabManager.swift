@@ -16,11 +16,13 @@ private struct SavedSession: Codable {
 final class TabManager: ObservableObject {
     @Published private(set) var tabs: [BrowserTab] = []
     @Published var selectedID: UUID?
+    /// Pantalla que DemoMode pide abrir (capturas de CI).
+    @Published var demoRequest: String?
 
     private static let sessionFile = "session.json"
 
     init() {
-        restoreSession()
+        if DemoMode.screen == nil { restoreSession() }
         if tabs.isEmpty { newTab() }
     }
 
@@ -81,6 +83,7 @@ final class TabManager: ObservableObject {
 
     /// Se llama al pasar a segundo plano: iOS puede cerrar la app sin avisar después.
     func saveSession() {
+        guard DemoMode.screen == nil else { return }
         var saved: [SavedTab] = []
         var selected = 0
         for tab in tabs where !tab.isPrivate {

@@ -75,6 +75,25 @@ private struct TabContent: View {
             ShieldPanel(tab: tab).presentationDetents([.medium])
         }
         .onAppear { tab.restoreIfNeeded() }
+        .onReceive(tabs.$demoRequest) { showDemo($0) }
+    }
+
+    /// Capturas de CI: abre la pantalla pedida por DemoMode.
+    private func showDemo(_ screen: String?) {
+        guard let screen else { return }
+        tabs.demoRequest = nil
+        switch screen {
+        case "tabs": tab.captureSnapshot(); showTabs = true
+        case "history": showHistory = true
+        case "bookmarks": showBookmarks = true
+        case "settings": showSettings = true
+        case "shield": showShieldPanel = true
+        case "media": showMedia = true
+        case "suggest":
+            addressFocused = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { query = "wi" }
+        default: break
+        }
     }
 
     /// Favoritos, historial y página de inicio: en esta pestaña o en una nueva.
