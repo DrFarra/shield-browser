@@ -39,17 +39,16 @@ struct TabsView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Listo") { dismiss() }.bold()
                 }
-                ToolbarItemGroup(placement: .bottomBar) {
+                ToolbarItem(placement: .bottomBar) {
                     Button { tabs.newTab(isPrivate: true); dismiss() } label: {
-                        Label("Privada", systemImage: "eyeglasses")
+                        Label("Nueva pestaña privada", systemImage: "eyeglasses")
                     }
-                    Spacer()
+                }
+                ToolbarSpacer(.flexible, placement: .bottomBar)
+                ToolbarItem(placement: .bottomBar) {
                     Button { tabs.newTab(); dismiss() } label: {
-                        Image(systemName: "plus").font(.title2)
+                        Label("Nueva pestaña", systemImage: "plus")
                     }
-                    .accessibilityLabel("Nueva pestaña")
-                    Spacer()
-                    Color.clear.frame(width: 44)   // centra el botón +
                 }
             }
             .confirmationDialog("¿Cerrar \(tabs.tabs.count) pestañas?", isPresented: $confirmCloseAll,

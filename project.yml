@@ -1,6 +1,7 @@
 name: Shield
 options:
   bundleIdPrefix: com.emilio
+  developmentLanguage: es
   deploymentTarget:
     iOS: "26.0"
 settings:
@@ -23,6 +24,8 @@ targets:
       path: Shield/Info.plist
       properties:
         CFBundleDisplayName: Shield
+        CFBundleDevelopmentRegion: es
+        CFBundleLocalizations: [es]
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
