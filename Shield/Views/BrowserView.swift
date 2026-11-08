@@ -16,14 +16,15 @@ private struct TabContent: View {
     @EnvironmentObject private var tabs: TabManager
     @EnvironmentObject private var blocker: ContentBlocker
 
-    @State private var address = ""
+    @State private var query = ""
+    @State private var addressFocused = false
     @State private var showTabs = false
     @State private var showSettings = false
     @State private var showShieldPanel = false
     @State private var showMedia = false
     @State private var showDownloads = false
+    @State private var showHistory = false
     @ObservedObject private var downloads = DownloadManager.shared
-    @FocusState private var addressFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -40,8 +41,14 @@ private struct TabContent: View {
                         .progressViewStyle(.linear)
                         .tint(.orange)
                 }
+                if addressFocused {
+                    SuggestionsView(query: query) { open($0) }
+                        .background(Color(.systemGroupedBackground))
+                        .transition(.opacity)
+                }
             }
-            if let popup = tab.blockedPopup {
+            .animation(.easeInOut(duration: 0.15), value: addressFocused)
+            if let popup = tab.blockedPopup, !addressFocused {
                 popupBanner(popup)
             }
             }
@@ -58,12 +65,20 @@ private struct TabContent: View {
             }
         }
         .sheet(isPresented: $showDownloads) { NavigationStack { DownloadsView() } }
+        .sheet(isPresented: $showHistory) {
+            HistoryView { url, newTab in
+                if newTab { tabs.newTab(request: URLRequest(url: url)) } else { tab.load(url.absoluteString) }
+            }
+        }
         .sheet(isPresented: $showShieldPanel) {
             ShieldPanel(tab: tab).presentationDetents([.medium])
         }
-        .onChange(of: addressFocused) { _, focused in
-            if focused { address = tab.url?.absoluteString ?? "" }
-        }
+    }
+
+    /// Abre lo escrito o la sugerencia elegida en la pestaña actual.
+    private func open(_ text: String) {
+        addressFocused = false
+        tab.load(text)
     }
 
     // MARK: - Barra inferior
@@ -79,13 +94,8 @@ private struct TabContent: View {
                 .accessibilityLabel("Escudos")
 
                 ZStack(alignment: .leading) {
-                    TextField("Buscar o escribir dirección", text: $address)
-                        .focused($addressFocused)
-                        .keyboardType(.webSearch)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.go)
-                        .onSubmit { tab.load(address); addressFocused = false }
+                    AddressField(query: $query, isEditing: $addressFocused,
+                                 currentURL: tab.url?.absoluteString ?? "") { open($0) }
                         .opacity(addressFocused ? 1 : 0)
                     if !addressFocused {
                         HStack(spacing: 4) {
@@ -153,6 +163,9 @@ private struct TabContent: View {
                         Divider()
                         if let url = tab.url {
                             ShareLink(item: url) { Label("Compartir", systemImage: "square.and.arrow.up") }
+                        }
+                        Button { showHistory = true } label: {
+                            Label("Historial", systemImage: "clock")
                         }
                         Button { showDownloads = true } label: {
                             Label("Descargas", systemImage: "tray.and.arrow.down")

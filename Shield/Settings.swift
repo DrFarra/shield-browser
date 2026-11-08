@@ -79,15 +79,21 @@ enum URLBuilder {
     static func url(from input: String) -> URL? {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
+        return address(from: text) ?? ShieldSettings.searchEngine.searchURL(text)
+    }
+
+    /// La URL si lo escrito es una dirección; nil si es una búsqueda.
+    static func address(from input: String) -> URL? {
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         if let url = URL(string: text), let scheme = url.scheme?.lowercased(),
            ["http", "https", "about", "file"].contains(scheme) {
             return url
         }
-        let looksLikeHost = !text.contains(" ") && (text.contains(".") || text.hasPrefix("localhost"))
+        let looksLikeHost = !text.isEmpty && !text.contains(" ") && (text.contains(".") || text.hasPrefix("localhost"))
         if looksLikeHost, let url = URL(string: "https://" + text), url.host() != nil {
             return url
         }
-        return ShieldSettings.searchEngine.searchURL(text)
+        return nil
     }
 
     /// Dominio registrable aproximado: "img.foro.com.ar" → "foro.com.ar".

@@ -140,10 +140,17 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private func observe() {
         observations = [
             webView.observe(\.title) { [weak self] wv, _ in
-                MainActor.assumeIsolated { self?.title = wv.title ?? "" }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.title = wv.title ?? ""
+                    if !self.isPrivate, let url = wv.url { HistoryStore.shared.updateTitle(self.title, for: url) }
+                }
             },
             webView.observe(\.url) { [weak self] wv, _ in
-                MainActor.assumeIsolated { self?.url = wv.url }
+                MainActor.assumeIsolated {
+                    self?.url = wv.url
+                    if !wv.isLoading { self?.recordVisit() }   // webs que cambian de página sin recargar
+                }
             },
             webView.observe(\.estimatedProgress) { [weak self] wv, _ in
                 MainActor.assumeIsolated { self?.progress = wv.estimatedProgress }
@@ -158,6 +165,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                 MainActor.assumeIsolated { self?.canGoForward = wv.canGoForward }
             },
         ]
+    }
+
+    private func recordVisit() {
+        guard !isPrivate, let url = webView.url else { return }
+        HistoryStore.shared.record(url, title: webView.title)
     }
 
     fileprivate func didReceive(_ message: WKScriptMessage) {
@@ -275,6 +287,10 @@ extension BrowserTab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
         DownloadManager.shared.adopt(download, name: navigationAction.request.url?.lastPathComponent)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        recordVisit()
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
