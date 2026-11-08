@@ -22,6 +22,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     /// Lo asigna TabManager para abrir ventanas nuevas como pestañas.
     var onOpenInNewTab: ((URLRequest) -> Void)?
+    /// Pestaña desde la que se abrió esta (enlace en pestaña nueva).
+    weak var opener: BrowserTab?
+    var onBackToOpener: (() -> Void)?
 
     private var observations: [NSKeyValueObservation] = []
     private var appliedShields: Bool?
@@ -35,6 +38,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = isPrivate ? .nonPersistent() : .default()
         config.allowsInlineMediaPlayback = true
+        config.ignoresViewportScaleLimits = true                     // zoom aunque la web lo bloquee, como Safari
         config.mediaTypesRequiringUserActionForPlayback = .all      // sin autoplay
         config.upgradeKnownHostsToHTTPS = true
         config.preferences.javaScriptCanOpenWindowsAutomatically = false // bloquea pop-ups
@@ -52,6 +56,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         let refresh = UIRefreshControl()
         refresh.addTarget(self, action: #selector(pullToRefresh(_:)), for: .valueChanged)
         webView.scrollView.refreshControl = refresh
+
+        // Deslizar desde el borde sin historial: cerrar y volver a la pestaña de origen.
+        let edge = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(edgeSwipe(_:)))
+        edge.edges = .left
+        edge.delegate = self
+        webView.addGestureRecognizer(edge)
 
         observe()
         applyShields(for: nil)
@@ -79,6 +89,13 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @objc private func pullToRefresh(_ sender: UIRefreshControl) {
         reload()
         sender.endRefreshing()
+    }
+
+    @objc private func edgeSwipe(_ gesture: UIScreenEdgePanGestureRecognizer) {
+        guard gesture.state == .ended else { return }
+        if gesture.translation(in: webView).x > 80 || gesture.velocity(in: webView).x > 500 {
+            onBackToOpener?()
+        }
     }
 
     @objc private func rulesReady() {
@@ -292,6 +309,17 @@ extension BrowserTab: WKUIDelegate {
             }
         }
         return nil
+    }
+}
+
+extension BrowserTab: UIGestureRecognizerDelegate {
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        !webView.canGoBack && opener != nil
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        true
     }
 }
 

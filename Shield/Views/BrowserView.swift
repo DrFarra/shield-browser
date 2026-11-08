@@ -118,7 +118,9 @@ private struct TabContent: View {
 
             if !addressFocused {
                 HStack {
-                    toolbarButton("chevron.backward", enabled: tab.canGoBack) { tab.goBack() }
+                    toolbarButton("chevron.backward", enabled: tab.canGoBack || tab.opener != nil) {
+                        tabs.goBack(in: tab)
+                    }
                     toolbarButton("chevron.forward", enabled: tab.canGoForward) { tab.goForward() }
                     Button { showMedia = true } label: {
                         Image(systemName: "arrow.down.circle")

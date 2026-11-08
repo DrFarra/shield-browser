@@ -164,6 +164,16 @@
   // Clics reales del usuario
   window.addEventListener('click', function (e) {
     var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    // Toque sobre un vídeo (no sobre una miniatura con enlace): reproductor nativo directo,
+    // sin depender de que el reproductor de la web llegue a darle play.
+    if (!a && e.isTrusted && window.__shieldNativePlayer && recentTap()) {
+      var v = videoAt(e.clientX, e.clientY, e.target);
+      if (v && openNative(v)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
+    }
     if (!a || /^(javascript|#)/i.test(a.getAttribute('href') || '')) return;
     if (!sameSite(a.href) && isOverlay(a)) {
       e.preventDefault();
@@ -404,25 +414,69 @@
     if (!src || /^blob:/i.test(src)) src = hlsMaster || lastHLS || '';   // hls.js / MSE
     return /^https?:/i.test(src) ? src : '';
   }
-  document.addEventListener('play', function (e) {
-    var v = e.target;
-    if (!v || v.tagName !== 'VIDEO') return;
-    if (v.__shieldHeld) { v.pause(); return; }
-    if (!window.__shieldNativePlayer) return;
-    if (!recentTap()) return;               // sólo si lo pidió el usuario (no autoplay)
+  // Algunos reproductores llaman a play() tras una espera (token, anuncio…).
+  function videoTap() { return Date.now() - lastTap.time < 5000; }
+  var nativeMediaPlay = HTMLMediaElement.prototype.play;
+  var nativeMediaPause = HTMLMediaElement.prototype.pause;
+
+  // Abre el vídeo en el reproductor del iPhone y retiene el de la web.
+  function openNative(v) {
     var src = playableSource(v);
-    if (!src) return;                       // sin URL utilizable: se queda el de la web
-    v.__shieldHeld = { muted: v.muted };
-    held.push(v);
+    if (!src) return false;                 // sin URL utilizable: se queda el de la web
+    if (!v.__shieldHeld) { v.__shieldHeld = { muted: v.muted }; held.push(v); }
     v.muted = true;
-    v.pause();
+    nativeMediaPause.call(v);
     try { if (v.webkitDisplayingFullscreen) v.webkitExitFullscreen(); } catch (err) {}
     try { if (document.webkitFullscreenElement) document.webkitExitFullscreen(); } catch (err) {}
-    lastTap.time = 0;
+    lastTap.time = 0;                       // un toque = una apertura
     post({ nativePlay: src, poster: v.poster ? abs(v.poster) : null, page: location.href,
            time: v.currentTime || 0, title: document.title || '',
            hls: /\.m3u8(\?|#|$)/i.test(src) || src === lastHLS || src === hlsMaster });
+    return true;
+  }
+
+  // play() desde JS (incluye reproductores dentro de shadow DOM, donde el evento no llega)
+  HTMLMediaElement.prototype.play = function () {
+    if (this.tagName === 'VIDEO') {
+      if (window.__shieldNativePlayer && videoTap() && openNative(this)) {
+        return Promise.reject(new DOMException('Abierto en el reproductor del iPhone', 'NotAllowedError'));
+      }
+      if (this.__shieldHeld) {
+        return Promise.reject(new DOMException('Vídeo en el reproductor del iPhone', 'NotAllowedError'));
+      }
+    }
+    return nativeMediaPlay.apply(this, arguments);
+  };
+
+  // play desde los controles propios del vídeo
+  document.addEventListener('play', function (e) {
+    var v = e.target;
+    if (!v || v.tagName !== 'VIDEO') return;
+    if (window.__shieldNativePlayer && videoTap() && openNative(v)) return;
+    if (v.__shieldHeld) nativeMediaPause.call(v);
   }, true);
+
+  // Vídeo bajo el dedo, aunque esté tapado por los botones del reproductor.
+  function videoAt(x, y, target) {
+    var list = document.elementsFromPoint ? document.elementsFromPoint(x, y) : [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].tagName === 'VIDEO') return list[i];
+      var sr = list[i].shadowRoot;
+      if (sr && sr.elementsFromPoint) {
+        var inner = sr.elementsFromPoint(x, y);
+        for (var j = 0; j < inner.length; j++) if (inner[j].tagName === 'VIDEO') return inner[j];
+      }
+    }
+    // vídeos con pointer-events:none: buscar en los contenedores cercanos
+    for (var n = target, k = 0; n && n.querySelector && k < 5; n = n.parentElement, k++) {
+      var v = n.querySelector('video');
+      if (v) {
+        var r = v.getBoundingClientRect();
+        return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom ? v : null;
+      }
+    }
+    return null;
+  }
   window.addEventListener('message', function (e) {
     if (e.data && e.data.__shieldScan) scan();
   });

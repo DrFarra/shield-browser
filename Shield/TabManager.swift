@@ -17,7 +17,11 @@ final class TabManager: ObservableObject {
     func newTab(isPrivate: Bool = false, request: URLRequest? = nil) -> BrowserTab {
         let tab = BrowserTab(isPrivate: isPrivate)
         tab.onOpenInNewTab = { [weak self, weak tab] request in
-            self?.newTab(isPrivate: tab?.isPrivate ?? false, request: request)
+            let child = self?.newTab(isPrivate: tab?.isPrivate ?? false, request: request)
+            child?.opener = tab
+        }
+        tab.onBackToOpener = { [weak self, weak tab] in
+            if let self, let tab { self.goBack(in: tab) }
         }
         tabs.append(tab)
         selectedID = tab.id
@@ -32,6 +36,14 @@ final class TabManager: ObservableObject {
         if !tabs.contains(where: { $0.id == selectedID }) {
             selectedID = tabs.last?.id
         }
+    }
+
+    /// Atrás: historial de la pestaña o, si ya no hay, cerrarla y volver a la que la abrió (como Safari).
+    func goBack(in tab: BrowserTab) {
+        if tab.webView.canGoBack { tab.goBack(); return }
+        guard let opener = tab.opener, tabs.contains(where: { $0 === opener }) else { return }
+        close(tab)
+        selectedID = opener.id
     }
 
     func closeAll() {
