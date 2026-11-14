@@ -3,7 +3,7 @@ name: Build iOS app
 on:
   push:
     branches: [main]
-  pull_request:   # compila y deja la IPA como artefacto, sin publicar release
+  pull_request:   # compila y publica la IPA como prerelease "pr-preview"
   workflow_dispatch:
   schedule:
     - cron: "0 6 * * 1"   # cada lunes: recompila con las listas de filtros más recientes
@@ -60,3 +60,15 @@ jobs:
           gh release create "build-${{ github.run_number }}" Shield.ipa \
             --title "Shield build ${{ github.run_number }}" \
             --notes "IPA sin firmar. Instálala con Sideloadly (ver README)." --latest
+
+      # Los artefactos de Actions siempre se bajan en .zip; una release da el .ipa directo.
+      - name: Publicar IPA de prueba del pull request
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete pr-preview --cleanup-tag --yes || true
+          gh release create pr-preview Shield.ipa --prerelease \
+            --target "${{ github.event.pull_request.head.sha }}" \
+            --title "Shield (prueba del PR #${{ github.event.pull_request.number }})" \
+            --notes "IPA sin firmar de un pull request sin fusionar. Se sustituye en cada compilación."
