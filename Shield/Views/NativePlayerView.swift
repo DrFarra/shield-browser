@@ -8,18 +8,20 @@ import WebKit
 struct NativePlayerView: View {
     let video: NativeVideo
     let webView: WKWebView
+    let onClose: () -> Void
     var onUseWebPlayer: () -> Void = {}
 
-    @Environment(\.dismiss) private var dismiss
+    @State private var drag: CGFloat = 0
     @State private var player: AVPlayer?
     @State private var downloadStarted = false
     @State private var failure: String?
     @State private var statusObservation: NSKeyValueObservation?
 
     var body: some View {
+        let progress = min(max(drag / 300, 0), 1)
         VStack(spacing: 0) {
             HStack(spacing: 16) {
-                Button { dismiss() } label: {
+                Button { onClose() } label: {
                     Image(systemName: "chevron.down").font(.title3.bold())
                 }
                 Text(video.title.isEmpty ? (video.url.host() ?? "Vídeo") : video.title)
@@ -34,7 +36,7 @@ struct NativePlayerView: View {
                     Divider()
                     Button {
                         onUseWebPlayer()
-                        dismiss()
+                        onClose()
                     } label: {
                         Label("Usar el reproductor de la web", systemImage: "globe")
                     }
@@ -51,10 +53,14 @@ struct NativePlayerView: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
+            .contentShape(Rectangle())
+            .gesture(DragGesture()
+                .onChanged { dragChanged($0.translation.height) }
+                .onEnded { dragEnded($0.translation.height, velocity: $0.velocity.height) })
 
             ZStack {
                 if let player {
-                    PlayerController(player: player)
+                    PlayerController(player: player, onDrag: dragChanged, onDragEnd: dragEnded)
                 } else if failure == nil {
                     ProgressView().tint(.white)
                 }
@@ -78,13 +84,27 @@ struct NativePlayerView: View {
                     .padding(.vertical, 8)
             }
         }
-        .background(Color.black.ignoresSafeArea())
+        // Arrastrar hacia abajo: el vídeo sigue al dedo, encoge y deja ver la web.
+        .offset(y: drag)
+        .scaleEffect(1 - progress * 0.12)
+        .background(Color.black.opacity(1 - progress * 0.7).ignoresSafeArea())
+        .accessibilityAction(.escape) { onClose() }
         .task { await load() }
         .onDisappear {
             player?.pause()
             // Devuelve el sonido al vídeo de la web y deja de forzar la pausa.
             webView.evaluateJavaScript("window.__shieldRelease && window.__shieldRelease(); 0",
                                        completionHandler: nil)
+        }
+    }
+
+    private func dragChanged(_ y: CGFloat) { drag = max(y, 0) }
+
+    private func dragEnded(_ y: CGFloat, velocity: CGFloat) {
+        if y > 120 || velocity > 900 {
+            onClose()
+        } else {
+            withAnimation(.snappy(duration: 0.25)) { drag = 0 }
         }
     }
 
@@ -129,6 +149,10 @@ struct NativePlayerView: View {
 
 private struct PlayerController: UIViewControllerRepresentable {
     let player: AVPlayer
+    let onDrag: (CGFloat) -> Void
+    let onDragEnd: (CGFloat, CGFloat) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
@@ -137,10 +161,55 @@ private struct PlayerController: UIViewControllerRepresentable {
         controller.canStartPictureInPictureAutomaticallyFromInline = true
         controller.updatesNowPlayingInfoCenter = true
         controller.entersFullScreenWhenPlaybackBegins = false
+        controller.delegate = context.coordinator
+        let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pan(_:)))
+        pan.delegate = context.coordinator
+        controller.view.addGestureRecognizer(pan)
         return controller
     }
 
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
+        context.coordinator.parent = self
         if controller.player !== player { controller.player = player }
+    }
+
+    /// Gesto de arrastrar hacia abajo para cerrar, conviviendo con los controles del sistema.
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate, AVPlayerViewControllerDelegate {
+        var parent: PlayerController
+        private var fullScreen = false   // a pantalla completa el gesto de salir es el del sistema
+
+        init(_ parent: PlayerController) { self.parent = parent }
+
+        @objc func pan(_ gesture: UIPanGestureRecognizer) {
+            // En coordenadas de la ventana: la vista se mueve con el dedo.
+            let y = gesture.translation(in: nil).y
+            switch gesture.state {
+            case .changed: parent.onDrag(y)
+            case .ended: parent.onDragEnd(y, gesture.velocity(in: nil).y)
+            case .cancelled, .failed: parent.onDragEnd(0, 0)
+            default: break
+            }
+        }
+
+        func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+            guard !fullScreen, let pan = gesture as? UIPanGestureRecognizer else { return false }
+            let v = pan.velocity(in: nil)
+            return v.y > abs(v.x)   // sólo hacia abajo: la barra de progreso es horizontal
+        }
+
+        func gestureRecognizer(_ gesture: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+
+        func playerViewController(_ playerViewController: AVPlayerViewController,
+                                  willBeginFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator) {
+            fullScreen = true
+        }
+
+        func playerViewController(_ playerViewController: AVPlayerViewController,
+                                  willEndFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator) {
+            coordinator.animate(alongsideTransition: nil) { [weak self] context in
+                if !context.isCancelled { self?.fullScreen = false }
+            }
+        }
     }
 }
