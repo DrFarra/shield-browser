@@ -334,6 +334,7 @@
   var queue = [];
   var flushTimer = null;
   function addMedia(kind, url, extra) {
+    if (!url) return;   // sin src: abs() devolvería la propia página o ".../null"
     url = abs(url);
     if (!url || /^(blob|data|about|javascript):/i.test(url)) return;
     var key = kind + url;

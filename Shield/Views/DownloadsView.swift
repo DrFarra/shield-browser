@@ -239,6 +239,8 @@ private struct FileThumbnail: View {
             }
         }
         .task(id: url) {
+            // Sólo donde la miniatura aporta algo: en texto y demás sale un recuadro en blanco.
+            guard DownloadManager.canSaveToPhotos(url) || url.pathExtension.lowercased() == "pdf" else { return }
             let request = QLThumbnailGenerator.Request(fileAt: url, size: CGSize(width: 52, height: 52),
                                                        scale: scale, representationTypes: .thumbnail)
             image = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request).uiImage
