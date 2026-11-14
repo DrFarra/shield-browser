@@ -115,19 +115,8 @@ struct NativePlayerView: View {
     }
 
     private func load() async {
-        let cookies = await webView.configuration.websiteDataStore.httpCookieStore.allCookies()
-        let userAgent = try? await webView.evaluateJavaScript("navigator.userAgent") as? String
-        var headers: [String: String] = [:]
-        if let page = video.pageURL ?? webView.url { headers["Referer"] = page.absoluteString }
-        if let userAgent { headers["User-Agent"] = userAgent }
-
-        let asset = AVURLAsset(url: video.url, options: [
-            "AVURLAssetHTTPHeaderFieldsKey": headers,
-            AVURLAssetHTTPCookiesKey: cookies,
-        ])
-        let item = AVPlayerItem(asset: asset)
-        let newPlayer = AVPlayer(playerItem: item)
-        statusObservation = item.observe(\.status) { item, _ in
+        let newPlayer = await video.makePlayer(for: webView)
+        statusObservation = newPlayer.currentItem?.observe(\.status) { item, _ in
             guard item.status == .failed else { return }
             let message = item.error?.localizedDescription ?? "error desconocido"
             Task { @MainActor in
@@ -135,16 +124,150 @@ struct NativePlayerView: View {
                 player = nil
             }
         }
-        if video.startTime > 1 {
-            _ = await newPlayer.seek(to: CMTime(seconds: video.startTime, preferredTimescale: 600))
+        player = newPlayer
+        newPlayer.play()
+    }
+}
+
+extension NativeVideo {
+    /// AVPlayer con el Referer, el User-Agent y las cookies de la página.
+    @MainActor
+    func makePlayer(for webView: WKWebView) async -> AVPlayer {
+        let cookies = await webView.configuration.websiteDataStore.httpCookieStore.allCookies()
+        let userAgent = try? await webView.evaluateJavaScript("navigator.userAgent") as? String
+        var headers: [String: String] = [:]
+        if let page = pageURL ?? webView.url { headers["Referer"] = page.absoluteString }
+        if let userAgent { headers["User-Agent"] = userAgent }
+
+        let asset = AVURLAsset(url: url, options: [
+            "AVURLAssetHTTPHeaderFieldsKey": headers,
+            AVURLAssetHTTPCookiesKey: cookies,
+        ])
+        let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+        if startTime > 1 {
+            _ = await player.seek(to: CMTime(seconds: startTime, preferredTimescale: 600))
         }
         // La web puede haber desactivado la sesión de audio al pausar su vídeo.
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
-        newPlayer.isMuted = false
-        player = newPlayer
-        newPlayer.play()
+        player.isMuted = false
+        return player
     }
+}
+
+/// Reproductor del iPhone colocado dentro de la página, justo encima del vídeo
+/// de la web: es una subvista del scroll, así que se desplaza con el contenido.
+@MainActor
+final class InlinePlayerView: UIView {
+    private let controller = AVPlayerViewController()
+    private let menuButton = UIButton(configuration: .glass())
+    private let video: NativeVideo
+    private weak var tab: BrowserTab?
+    private var statusObservation: NSKeyValueObservation?
+    private var hideMenu: Task<Void, Never>?
+
+    init(video: NativeVideo, tab: BrowserTab) {
+        self.video = video
+        self.tab = tab
+        super.init(frame: .zero)
+        backgroundColor = .black
+        clipsToBounds = true
+        controller.allowsPictureInPicturePlayback = true
+        controller.updatesNowPlayingInfoCenter = true
+        controller.view.frame = bounds
+        controller.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(controller.view)
+
+        menuButton.configuration?.image = UIImage(systemName: "ellipsis")
+        menuButton.tintColor = .white
+        menuButton.accessibilityLabel = "Opciones del vídeo"
+        menuButton.showsMenuAsPrimaryAction = true
+        menuButton.menu = UIMenu(children: [
+            UIAction(title: "Descargar vídeo", image: UIImage(systemName: "arrow.down.circle")) { [weak self] _ in
+                guard let self, let tab = self.tab else { return }
+                DownloadManager.shared.download(self.video.asMedia, from: tab.webView)
+            },
+            UIAction(title: "Usar el reproductor de la web", image: UIImage(systemName: "globe")) { [weak self] _ in
+                self?.tab?.setNativePlayer(false)
+                self?.tab?.closeInlinePlayer()
+            },
+            UIAction(title: "Cerrar", image: UIImage(systemName: "xmark")) { [weak self] _ in
+                self?.tab?.closeInlinePlayer()
+            },
+        ])
+        menuButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(menuButton)
+        // Bajo el botón de volumen del sistema, único hueco libre de sus controles.
+        NSLayoutConstraint.activate([
+            menuButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            menuButton.topAnchor.constraint(equalTo: topAnchor, constant: 56),
+        ])
+        let tap = UITapGestureRecognizer(target: self, action: #selector(flashMenu))
+        tap.cancelsTouchesInView = false
+        tap.delegate = self
+        addGestureRecognizer(tap)
+        flashMenu()
+
+        Task { [weak self] in
+            guard let webView = self?.tab?.webView else { return }
+            let player = await video.makePlayer(for: webView)
+            guard let self, self.superview != nil else { return }
+            self.statusObservation = player.currentItem?.observe(\.status) { [weak self] item, _ in
+                guard item.status == .failed else { return }
+                Task { @MainActor in self?.failed() }
+            }
+            self.controller.player = player
+            player.play()
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) no se usa") }
+
+    /// Si aquí no se puede reproducir, se abre la capa completa, que explica el fallo y ofrece descargar.
+    private func failed() {
+        guard let tab else { return }
+        tab.closeInlinePlayer()
+        tab.nativeVideo = video
+    }
+
+    /// El botón de opciones aparece al tocar el vídeo, como los controles del sistema.
+    @objc private func flashMenu() {
+        hideMenu?.cancel()
+        UIView.animate(withDuration: 0.2) { self.menuButton.alpha = 1 }
+        hideMenu = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 3_500_000_000)
+            guard !Task.isCancelled else { return }
+            UIView.animate(withDuration: 0.3) { self?.menuButton.alpha = 0 }
+        }
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if let root = window?.rootViewController {
+            // Con un controlador padre el botón de pantalla completa del sistema funciona.
+            if controller.parent == nil {
+                root.addChild(controller)
+                controller.didMove(toParent: root)
+            }
+        } else {
+            controller.player?.pause()   // pestaña en segundo plano
+        }
+    }
+
+    func close() {
+        hideMenu?.cancel()
+        statusObservation = nil
+        controller.player?.pause()
+        controller.willMove(toParent: nil)
+        controller.view.removeFromSuperview()
+        controller.removeFromParent()
+        removeFromSuperview()
+    }
+}
+
+extension InlinePlayerView: UIGestureRecognizerDelegate {
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 }
 
 private struct PlayerController: UIViewControllerRepresentable {
