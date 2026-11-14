@@ -18,7 +18,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @Published var media: [MediaItem] = []
     @Published var blockedPopup: URL?
     @Published var popupsBlocked = 0
+    /// Vídeo en la capa a pantalla completa (cuando no se puede colocar dentro de la página).
     @Published var nativeVideo: NativeVideo?
+    /// Vídeo que espera a que shield.js diga en qué parte de la página está.
+    private var pendingVideo: NativeVideo?
+    private var inlinePlayer: InlinePlayerView?
     /// Miniatura para la vista de pestañas.
     @Published var snapshot: UIImage?
     /// Pedir la versión de escritorio de las páginas en esta pestaña.
@@ -245,10 +249,56 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             }
         }
         if let video = NativeVideo(body) {
-            nativeVideo = video
+            closeInlinePlayer(release: false)
+            pendingVideo = video
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                guard let self, self.pendingVideo?.id == video.id else { return }
+                self.pendingVideo = nil
+                self.nativeVideo = video      // sin posición utilizable: capa completa
+            }
+        }
+        if body["nativeTrack"] != nil {
+            if let rect = body["rect"] as? [String: Any] {
+                placeInlinePlayer(rect)
+            } else if body["gone"] as? Bool == true, pendingVideo == nil {
+                closeInlinePlayer()
+            }
         }
         if let list = body["media"] as? [[String: Any]] {
             addMedia(list.compactMap(MediaItem.init))
+        }
+    }
+
+    // MARK: - Reproductor dentro de la página
+
+    /// Coloca (o recoloca) el reproductor sobre el vídeo de la web. `rect` viene en píxeles CSS de la página.
+    private func placeInlinePlayer(_ rect: [String: Any]) {
+        func value(_ key: String) -> CGFloat { CGFloat((rect[key] as? NSNumber)?.doubleValue ?? 0) }
+        let zoom = webView.scrollView.zoomScale
+        let frame = CGRect(x: value("x") * zoom, y: value("y") * zoom,
+                           width: value("w") * zoom, height: value("h") * zoom)
+        // Vídeos ocultos o diminutos: no se pueden ver dentro de la página.
+        guard frame.width >= 120, frame.height >= 68 else { return }
+        if let video = pendingVideo {
+            pendingVideo = nil
+            let player = InlinePlayerView(video: video, tab: self)
+            player.frame = frame
+            webView.scrollView.addSubview(player)
+            inlinePlayer = player
+        }
+        inlinePlayer?.frame = frame
+    }
+
+    /// Quita el reproductor de la página y devuelve el control al vídeo de la web.
+    func closeInlinePlayer(release: Bool = true) {
+        pendingVideo = nil
+        guard let player = inlinePlayer else { return }
+        inlinePlayer = nil
+        player.close()
+        if release {
+            webView.evaluateJavaScript("window.__shieldRelease && window.__shieldRelease(); 0",
+                                       completionHandler: nil)
         }
     }
 
@@ -324,6 +374,7 @@ extension BrowserTab: WKNavigationDelegate {
         cosmeticBlocked = 0
         popupsBlocked = 0
         media = []
+        closeInlinePlayer(release: false)
     }
 
     /// Enlaces a archivos que la web no puede mostrar (zip, pdf forzado, etc.) → descarga.

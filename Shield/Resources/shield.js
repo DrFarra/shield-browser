@@ -112,9 +112,15 @@
     if (url.split('#')[0] === location.href.split('#')[0]) return false;
     if (recentTap() && lastTap.link && lastTap.link !== url) return false;
     if (sameSite(url)) return true;
+    if (!recentTap() || !lastTap.target || !lastTap.target.closest) return false;
     // enlace externo que el usuario tocó de verdad (y no es una capa invisible)
-    return recentTap() && lastTap.link === url && !!lastTap.target && !!lastTap.target.closest &&
-      !isOverlay(lastTap.target.closest('a[href]'));
+    if (lastTap.link) return !isOverlay(lastTap.target.closest('a[href]'));
+    // "enlace" sin href real (span, javascript:…) abierto por script: sólo si lo
+    // que tocó muestra el dominio de destino, cosa que un anuncio no controla.
+    var shown = '';
+    try { shown = new URL(url).hostname.replace(/^www\./, ''); } catch (e) {}
+    return !!shown && !isOverlay(lastTap.target) &&
+      (lastTap.target.textContent || '').slice(0, 2000).toLowerCase().indexOf(shown) >= 0;
   }
   function blockPopup(url) {
     post({ popupBlocked: url || 'about:blank' });
@@ -128,6 +134,18 @@
       location: { href: 'about:blank', assign: noop, replace: noop } };
     w.close = function () { w.closed = true; };
     w.window = w; w.self = w;
+    // Patrón habitual: w = window.open('about:blank'); w.location = url;
+    // La dirección real vuelve a pasar por window.open (y sus mismas reglas).
+    var loc = w.location, done = false;
+    function go(u) {
+      u = abs(u);
+      if (done || !/^https?:/i.test(u)) return;
+      done = true;
+      window.open(u);
+    }
+    loc.assign = go; loc.replace = go;
+    Object.defineProperty(loc, 'href', { get: function () { return 'about:blank'; }, set: go });
+    Object.defineProperty(w, 'location', { get: function () { return loc; }, set: go });
     return w;
   }
 
@@ -138,7 +156,8 @@
       post({ allowPopup: u });
       return nativeOpen.apply(window, arguments);
     }
-    blockPopup(u);
+    // Ventana en blanco: aún no hay nada que bloquear; se decide cuando le pongan dirección.
+    if (u && u !== 'about:blank') blockPopup(u); else passThrough();
     return fakeWindow();   // el script cree que lo consiguió y no reintenta
   };
   window.open.toString = function () { return 'function open() { [native code] }'; };
@@ -429,11 +448,54 @@
     try { if (v.webkitDisplayingFullscreen) v.webkitExitFullscreen(); } catch (err) {}
     try { if (document.webkitFullscreenElement) document.webkitExitFullscreen(); } catch (err) {}
     lastTap.time = 0;                       // un toque = una apertura
+    tracked = v;
+    clearInterval(trackTimer);
+    trackTimer = setInterval(track, 500);
     post({ nativePlay: src, poster: v.poster ? abs(v.poster) : null, page: location.href,
            time: v.currentTime || 0, title: document.title || '',
            hls: /\.m3u8(\?|#|$)/i.test(src) || src === lastHLS || src === hlsMaster });
+    track();
     return true;
   }
+
+  // La app dibuja su reproductor encima del vídeo de la web: le decimos dónde está
+  // (y lo repetimos, por si la página se recoloca, gira o hace zoom).
+  var tracked = null, trackTimer = 0;
+  function track() {
+    var v = tracked;
+    if (!v || !v.__shieldHeld || !v.isConnected) {
+      clearInterval(trackTimer);
+      tracked = null;
+      sendUp({ gone: true });
+      return;
+    }
+    var r = v.getBoundingClientRect();
+    sendUp({ rect: { x: r.left, y: r.top, w: r.width, h: r.height } });
+  }
+  // Cada frame suma la posición de su iframe hasta llegar a la página principal.
+  function sendUp(m) {
+    if (window !== window.top) {
+      try { window.parent.postMessage({ __shieldUp: m }, '*'); } catch (e) {}
+      return;
+    }
+    if (m.rect) { m.rect.x += window.scrollX; m.rect.y += window.scrollY; }
+    post({ nativeTrack: true, rect: m.rect || null, gone: !!m.gone });
+  }
+  window.addEventListener('message', function (e) {
+    var m = e.data && e.data.__shieldUp;
+    if (!m) return;
+    var out = { gone: !!m.gone, rect: null };
+    if (m.rect && isFinite(m.rect.x + m.rect.y + m.rect.w + m.rect.h)) {
+      var frames = document.querySelectorAll('iframe');
+      for (var i = 0; i < frames.length; i++) {
+        if (frames[i].contentWindow !== e.source) continue;
+        var f = frames[i].getBoundingClientRect();
+        out.rect = { x: m.rect.x + f.left + frames[i].clientLeft, y: m.rect.y + f.top + frames[i].clientTop,
+                     w: m.rect.w, h: m.rect.h };
+      }
+    }
+    sendUp(out);
+  });
 
   // play() desde JS (incluye reproductores dentro de shadow DOM, donde el evento no llega)
   HTMLMediaElement.prototype.play = function () {
