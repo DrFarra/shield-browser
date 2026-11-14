@@ -64,7 +64,39 @@ private struct TabCard: View {
     let selected: Bool
     let onClose: () -> Void
 
+    /// Desplazamiento del gesto de deslizar para cerrar (hacia cualquier lado).
+    @State private var dragX: CGFloat = 0
+
     var body: some View {
+        card
+            .offset(x: dragX)
+            .rotationEffect(.degrees(dragX / 40))
+            .opacity(1 - min(abs(dragX) / 260, 0.7))
+            // simultáneo: la cuadrícula sigue desplazándose en vertical
+            .simultaneousGesture(DragGesture(minimumDistance: 20)
+                .onChanged { value in
+                    let t = value.translation
+                    if dragX != 0 || abs(t.width) > abs(t.height) * 1.5 { dragX = t.width }
+                }
+                .onEnded { value in
+                    let flick = abs(value.predictedEndTranslation.width) > 280
+                    if dragX != 0, abs(dragX) > 110 || flick {
+                        withAnimation(.snappy(duration: 0.2)) { dragX = dragX < 0 ? -500 : 500 }
+                        onClose()
+                    } else {
+                        withAnimation(.snappy(duration: 0.25)) { dragX = 0 }
+                    }
+                })
+            .contextMenu {
+                if let url = tab.url {
+                    Button { UIPasteboard.general.url = url } label: { Label("Copiar enlace", systemImage: "doc.on.doc") }
+                }
+                Button(role: .destructive, action: onClose) { Label("Cerrar pestaña", systemImage: "xmark") }
+            }
+            .accessibilityAction(named: "Cerrar pestaña", onClose)
+    }
+
+    private var card: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
                 if tab.isPrivate {
