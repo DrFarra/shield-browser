@@ -51,11 +51,19 @@ private struct TabContent: View {
         .sheet(isPresented: $showTabs) { TabsView() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showMedia) { MediaView(tab: tab) }
-        .fullScreenCover(item: $tab.nativeVideo) { video in
-            NativePlayerView(video: video, webView: tab.webView) {
-                tab.setNativePlayer(false)
+        // Capa del propio navegador (no una hoja modal): aparece sobre la web y se cierra arrastrando.
+        .overlay {
+            if let video = tab.nativeVideo {
+                NativePlayerView(video: video, webView: tab.webView, onClose: { tab.nativeVideo = nil }) {
+                    tab.setNativePlayer(false)
+                }
+                .id(video.id)
+                .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.92)),
+                                        removal: .opacity.combined(with: .move(edge: .bottom))))
             }
         }
+        .animation(.snappy(duration: 0.3), value: tab.nativeVideo?.id)
+        .statusBarHidden(tab.nativeVideo != nil)
         .sheet(isPresented: $showDownloads) { NavigationStack { DownloadsView() } }
         .sheet(isPresented: $showHistory) { HistoryView { openURL($0, newTab: $1) } }
         .sheet(isPresented: $showBookmarks) { BookmarksView { openURL($0, newTab: $1) } }
