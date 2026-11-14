@@ -10,6 +10,7 @@ struct SettingsView: View {
     @AppStorage(ShieldSettings.globalShieldsKey) private var globalShields = true
     @AppStorage(DownloadManager.autoSaveKey) private var autoSaveToPhotos = true
     @AppStorage(ShieldSettings.nativePlayerKey) private var nativePlayer = true
+    @AppStorage(ShieldSettings.popupNoticeKey) private var popupNotice = false
     @State private var confirmClear = false
     @State private var confirmResetSites = false
     @State private var cleared = false
@@ -31,6 +32,9 @@ struct SettingsView: View {
                         SettingsLabel("Bloquear anuncios y rastreadores", icon: "shield.lefthalf.filled", color: .shield)
                     }
                     .onChange(of: globalShields) { _, _ in tabs.tabs.forEach { $0.reload() } }
+                    Toggle(isOn: $popupNotice) {
+                        SettingsLabel("Avisar pop-ups bloqueados", icon: "hand.raised.fill", color: .purple)
+                    }
                     LabeledContent {
                         Text(blocker.ruleCount.formatted())
                     } label: {

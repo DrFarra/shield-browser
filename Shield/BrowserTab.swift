@@ -262,6 +262,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private func noteBlockedPopup(_ url: URL) {
         popupsBlocked += 1
         ShieldStats.add(1)
+        guard ShieldSettings.popupNotice else { return }
         blockedPopup = url
         popupBannerTask?.cancel()
         popupBannerTask = Task { [weak self] in
