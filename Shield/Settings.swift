@@ -31,6 +31,7 @@ enum ShieldSettings {
     static let searchEngineKey = "searchEngine"
     static let globalShieldsKey = "globalShields"
     static let nativePlayerKey = "nativePlayer"
+    static let popupNoticeKey = "popupNotice"
     private static let disabledHostsKey = "shieldsDisabledHosts"
     private static var defaults: UserDefaults { .standard }
 
@@ -44,6 +45,11 @@ enum ShieldSettings {
 
     static var nativePlayer: Bool {
         defaults.object(forKey: nativePlayerKey) as? Bool ?? true
+    }
+
+    /// Mostrar el aviso "Pop-up bloqueado · Abrir". Apagado por defecto: el pop-up se bloquea en silencio.
+    static var popupNotice: Bool {
+        defaults.bool(forKey: popupNoticeKey)
     }
 
     static var disabledHosts: Set<String> {
