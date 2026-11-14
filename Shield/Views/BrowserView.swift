@@ -64,7 +64,7 @@ private struct TabContent: View {
         }
         .animation(.snappy(duration: 0.3), value: tab.nativeVideo?.id)
         .statusBarHidden(tab.nativeVideo != nil)
-        .sheet(isPresented: $showDownloads) { NavigationStack { DownloadsView() } }
+        .sheet(isPresented: $showDownloads) { NavigationStack { DownloadsView(showsDone: true) } }
         .sheet(isPresented: $showHistory) { HistoryView { openURL($0, newTab: $1) } }
         .sheet(isPresented: $showBookmarks) { BookmarksView { openURL($0, newTab: $1) } }
         .sheet(item: $editingBookmark) { BookmarkEditor(bookmark: $0) }
@@ -300,6 +300,7 @@ private struct TabContent: View {
         case "settings": showSettings = true
         case "shield": showShieldPanel = true
         case "media": showMedia = true
+        case "downloads": showDownloads = true
         case "suggest":
             addressFocused = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { query = "wi" }
