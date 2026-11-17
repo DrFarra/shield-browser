@@ -76,6 +76,7 @@ final class ChatClient {
             var queue: [(time: Double, message: ChatMessage)] = []
             var cursor = 0.0, fetchedUntil = -1.0, last = -100.0
             var finished = false, jumped = false
+            var jumpDeadline: Date?
             while !Task.isCancelled {
                 guard let self else { return }
                 let now = position()
@@ -86,6 +87,7 @@ final class ChatClient {
                     fetchedUntil = cursor - 1
                     finished = false
                     jumped = true
+                    jumpDeadline = nil
                 }
                 last = now
                 if !finished, fetchedUntil < now + 30,
@@ -104,8 +106,16 @@ final class ChatClient {
                     }
                 }
                 let due = queue.prefix { $0.time <= now }.count
+                let batchReady = queue.prefix(due).allSatisfy { item in
+                    item.message.emoteURLs.allSatisfy { EmoteImages.shared.isReady($0) }
+                }
                 if jumped, fetchedUntil >= now || finished {
-                    // Se cambia el chat entero de una vez: sin vaciarlo antes ni ver cómo se rellena
+                    jumpDeadline = jumpDeadline ?? Date(timeIntervalSinceNow: 1.2)
+                }
+                if jumped, let deadline = jumpDeadline, batchReady || Date() > deadline {
+                    // Se cambia el chat entero de una vez, con sus emotes ya cargados:
+                    // sin vaciarlo antes ni ver cómo se rellena
+                    jumpDeadline = nil
                     staged = []
                     ready = []
                     held = []
