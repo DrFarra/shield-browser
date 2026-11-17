@@ -113,7 +113,7 @@ enum Twitch {
 
     static func topStreams(spanishOnly: Bool) async throws -> [Stream] {
         struct R: Decodable { let streams: Connection<Stream> }
-        let r: R = try await query("query { streams(first: 40\(languageOption(spanishOnly))) { edges { node { \(streamFields) } } } }")
+        let r: R = try await query("query { streams(first: 30\(languageOption(spanishOnly))) { edges { node { \(streamFields) } } } }")
         return r.streams.nodes
     }
 
@@ -131,7 +131,7 @@ enum Twitch {
         struct R: Decodable { let game: G? }
         let r: R = try await query("""
             query($name: String!) { game(name: $name) { \(gameFields) \
-            streams(first: 40\(languageOption(spanishOnly))) { edges { node { \(streamFields) } } } } }
+            streams(first: 30\(languageOption(spanishOnly))) { edges { node { \(streamFields) } } } } }
             """, ["name": name])
         guard let g = r.game else { return (nil, []) }
         return (Game(name: g.name, displayName: g.displayName, boxArtURL: g.boxArtURL, viewersCount: g.viewersCount),
@@ -292,6 +292,8 @@ enum Twitch {
         struct Message: Decodable { let message: String }
     }
 
+    private struct Ignored: Decodable {}
+
     static func query<T: Decodable>(_ query: String, _ variables: [String: Any] = [:]) async throws -> T {
         var request = URLRequest(url: URL(string: "https://gql.twitch.tv/gql")!)
         request.httpMethod = "POST"
@@ -299,8 +301,11 @@ enum Twitch {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["query": query, "variables": variables])
         let (data, _) = try await URLSession.shared.data(for: request)
-        let response = try decoder.decode(Response<T>.self, from: data)
-        if let value = response.data { return value }
-        throw Failure(message: response.errors?.first?.message ?? "Twitch no respondió")
+        // Si Twitch devuelve un error, "data" llega con campos nulos: mejor mostrar su mensaje que un fallo de lectura
+        let errors = (try? decoder.decode(Response<Ignored>.self, from: data))?.errors
+        guard let value = try? decoder.decode(Response<T>.self, from: data).data else {
+            throw Failure(message: errors?.first?.message ?? "Twitch no respondió")
+        }
+        return value
     }
 }
