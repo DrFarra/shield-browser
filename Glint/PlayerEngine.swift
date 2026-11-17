@@ -1,5 +1,4 @@
 import AVKit
-import Combine
 import Observation
 import UIKit
 
@@ -38,6 +37,9 @@ final class PlayerEngine {
     @ObservationIgnored private var videoID = ""
     /// Un clip se reproduce como un vídeo corto (modo .vod) desde su MP4.
     @ObservationIgnored private var clipSlug: String?
+    /// Mientras se cambia de vídeo y se salta a su punto, la posición no se toca
+    /// (si no, por un momento valdría 0 y se guardaría ese 0 en el historial).
+    @ObservationIgnored private var settling = false
     @ObservationIgnored private var startedAt: Date?
     @ObservationIgnored private var archiveID: String?
     @ObservationIgnored private var master: URL?
@@ -161,13 +163,22 @@ final class PlayerEngine {
             let message = item.error?.localizedDescription ?? "No se pudo reproducir"
             Task { @MainActor in self?.error = message }
         }
+        settling = true
+        defer { settling = false }
         player.pause()
         player.replaceCurrentItem(with: item)
         if let offset, offset > 0 {
             await item.readyToPlay()
-            await player.seek(to: CMTime(seconds: offset, preferredTimescale: 600),
-                              toleranceBefore: CMTime(seconds: 1, preferredTimescale: 600),
-                              toleranceAfter: CMTime(seconds: 1, preferredTimescale: 600))
+            guard player.currentItem === item else { return }
+            // Los VOD de Twitch son listas EVENT: a veces el primer salto no se aplica, así que se comprueba
+            let target = CMTime(seconds: offset, preferredTimescale: 600)
+            let tolerance = CMTime(seconds: 1, preferredTimescale: 600)
+            for _ in 0..<5 {
+                await player.seek(to: target, toleranceBefore: tolerance, toleranceAfter: tolerance)
+                if abs(player.currentTime().seconds - offset) < 5 { break }
+                try? await Task.sleep(for: .milliseconds(300))
+            }
+            position = offset
         }
         player.defaultRate = mode == .live ? 1 : rate
         player.play()
@@ -244,7 +255,7 @@ final class PlayerEngine {
     // MARK: - Estado
 
     private func tick() {
-        guard let item = player.currentItem else { return }
+        guard !settling, let item = player.currentItem else { return }
         let t = player.currentTime().seconds
         guard t.isFinite else { return }
         let elapsed = startedAt.map { Date().timeIntervalSince($0) } ?? 0
@@ -270,8 +281,11 @@ final class PlayerEngine {
 }
 
 private extension AVPlayerItem {
+    /// Espera a que el vídeo pueda empezar (máx. 15 s). Se consulta el estado
+    /// directamente porque el aviso por KVO no siempre llega con estas listas.
     func readyToPlay() async {
-        if status != .unknown { return }
-        for await value in publisher(for: \.status).values where value != .unknown { return }
+        for _ in 0..<300 where status == .unknown {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
     }
 }

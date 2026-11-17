@@ -39,3 +39,5 @@ shot paused 16
 shot mini 20
 shot vod 24
 shot clip 14
+shot resume 22
+shot quality 32

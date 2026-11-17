@@ -31,6 +31,18 @@ enum Demo {
             if let login, let clip = try? await Twitch.clips(channel: login).first {
                 playback.play(.clip(clip.slug))
             }
+        case "resume", "quality":
+            // Comprueba que un VOD empieza donde se dejó y que cambiar de calidad no lo reinicia
+            if let video = try? await Twitch.channel("ibai", withVideos: true)?.videos?.nodes.first {
+                library.recordWatch(video, position: 3000)
+                playback.play(.video(video.id))
+                try? await Task.sleep(for: .seconds(12))
+                if screen == "quality", let low = playback.engine.qualities.dropFirst(2).first {
+                    playback.engine.setQuality(low.name)
+                    try? await Task.sleep(for: .seconds(10))
+                }
+                playback.engine.togglePlay()
+            }
         case "history":
             router.home.append(.history)
         case "channel":
