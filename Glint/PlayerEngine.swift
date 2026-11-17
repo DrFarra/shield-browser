@@ -63,12 +63,12 @@ final class PlayerEngine {
         load(.live, at: nil)
     }
 
-    func startVOD(id: String, length: Double) {
+    func startVOD(id: String, length: Double, at offset: Double? = nil) {
         videoID = id
         startedAt = nil
         archiveID = nil
         duration = length
-        load(.vod, at: nil)
+        load(.vod, at: offset)
     }
 
     /// El VOD de la emisión puede aparecer unos minutos después de empezar.

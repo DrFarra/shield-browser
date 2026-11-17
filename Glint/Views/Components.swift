@@ -119,6 +119,7 @@ struct Thumbnail: View {
 struct VideoRow: View {
     let video: Twitch.Video
     @Environment(Playback.self) private var playback
+    @Environment(Library.self) private var library
 
     var body: some View {
         Button { playback.play(.video(video.id)) } label: {
@@ -132,6 +133,10 @@ struct VideoRow: View {
                             .background(.black.opacity(0.7), in: Capsule())
                             .padding(6)
                     }
+                    .overlay(alignment: .bottom) {
+                        if let watched = library.watched(video.id) { WatchProgress(value: watched.progress) }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 VStack(alignment: .leading, spacing: 4) {
                     Text(video.title ?? "")
                         .font(.subheadline.weight(.medium))
@@ -151,6 +156,21 @@ struct VideoRow: View {
         }
         .buttonStyle(PressStyle())
         .foregroundStyle(.primary)
+    }
+}
+
+/// Barra fina de "hasta dónde lo viste" al pie de una miniatura.
+struct WatchProgress: View {
+    let value: Double
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Rectangle().fill(.white.opacity(0.3))
+                Rectangle().fill(Color.glint).frame(width: geo.size.width * value)
+            }
+        }
+        .frame(height: 3)
     }
 }
 
@@ -245,6 +265,7 @@ extension View {
             switch route {
             case .channel(let login): ChannelView(login: login)
             case .game(let name): CategoryView(name: name)
+            case .history: HistoryView()
             }
         }
     }

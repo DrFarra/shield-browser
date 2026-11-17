@@ -19,6 +19,8 @@ final class Playback {
     private(set) var problem: String?
     let engine = PlayerEngine()
     let chat = ChatClient()
+    /// Para el historial de vídeos vistos; lo asigna la vista raíz.
+    @ObservationIgnored var library: Library?
 
     @ObservationIgnored private var task: Task<Void, Never>?
 
@@ -62,12 +64,18 @@ final class Playback {
     }
 
     private func stop() {
+        saveProgress()
         task?.cancel()
         engine.stop()
         chat.disconnect()
         channel = nil
         video = nil
         moreVideos = []
+    }
+
+    private func saveProgress() {
+        guard case .video = media, let video, engine.position > 0 else { return }
+        library?.recordWatch(video, position: engine.position)
     }
 
     private func start(_ media: Media) async {
@@ -99,9 +107,16 @@ final class Playback {
                     return
                 }
                 self.video = video
-                engine.startVOD(id: id, length: Double(video.lengthSeconds ?? 0))
+                let resume = library?.watched(id)?.resumePosition
+                engine.startVOD(id: id, length: Double(video.lengthSeconds ?? 0), at: resume)
+                library?.recordWatch(video, position: resume ?? 0)
                 if let login = video.owner?.login, let owner = try? await Twitch.channel(login, withVideos: true) {
                     moreVideos = (owner.videos?.nodes ?? []).filter { $0.id != id }
+                }
+                // Guarda por dónde vas, por si la app se cierra de golpe
+                while !Task.isCancelled {
+                    try await Task.sleep(for: .seconds(10))
+                    saveProgress()
                 }
             }
         } catch is CancellationError {

@@ -16,12 +16,19 @@ enum Demo {
             for channel in channels.reversed() { library.addRecent(channel.ref) }
             for channel in channels.prefix(3) { library.toggleFollow(channel.ref) }
         }
+        if library.watched.isEmpty, let videos = try? await Twitch.channel("ibai", withVideos: true)?.videos?.nodes.prefix(3) {
+            for (i, video) in videos.reversed().enumerated() {
+                library.recordWatch(video, position: Double(video.lengthSeconds ?? 0) * [0.1, 0.35, 0.7][i])
+            }
+        }
         let login = (try? await Twitch.topStreams(spanishOnly: true))?.first?.broadcaster?.login
         switch screen {
         case "browse":
             router.tab = .browse
         case "search":
             router.tab = .search
+        case "history":
+            router.home.append(.history)
         case "channel":
             if let login { router.home.append(.channel(login)) }
         case "player":

@@ -54,6 +54,7 @@ struct RootView: View {
 
             PlayerHost()
         }
+        .onAppear { playback.library = library }
         .task { await Demo.run(router: router, playback: playback, library: library) }
     }
 }

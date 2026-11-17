@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HomeView: View {
     @Environment(Library.self) private var library
+    @Environment(Playback.self) private var playback
     @AppStorage("spanishOnly") private var spanishOnly = true
     @State private var streams: [Twitch.Stream] = []
     @State private var followed: [Twitch.Channel] = []
@@ -16,6 +17,10 @@ struct HomeView: View {
             LazyVStack(alignment: .leading, spacing: 28) {
                 if !library.follows.isEmpty {
                     followingSection
+                }
+
+                if !library.watched.isEmpty {
+                    continueSection
                 }
 
                 VStack(alignment: .leading, spacing: 16) {
@@ -83,6 +88,45 @@ struct HomeView: View {
                 .contentMargins(.horizontal, 16, for: .scrollContent)
                 .padding(.horizontal, -16)
             }
+        }
+    }
+
+    /// VOD empezados, para retomarlos donde se dejaron.
+    private var continueSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SectionHeader(title: "Seguir viendo") {
+                NavigationLink("Historial", value: Route.history)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.glint)
+            }
+            ScrollView(.horizontal) {
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(library.watched.prefix(12)) { item in
+                        Button { playback.play(.video(item.id)) } label: {
+                            VStack(alignment: .leading, spacing: 8) {
+                                WatchedThumbnail(item: item)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.title).font(.footnote.weight(.semibold)).lineLimit(1)
+                                    Text(item.channel).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
+                            .frame(width: 220)
+                        }
+                        .buttonStyle(PressStyle())
+                        .foregroundStyle(.primary)
+                        .contextMenu {
+                            Button("Quitar del historial", systemImage: "trash", role: .destructive) {
+                                withAnimation { library.removeWatched(item.id) }
+                            }
+                        }
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.viewAligned)
+            .contentMargins(.horizontal, 16, for: .scrollContent)
+            .padding(.horizontal, -16)
         }
     }
 
