@@ -1,0 +1,70 @@
+name: Build Glint
+
+on:
+  push:
+    branches: [main, glint]
+    paths: ["Glint/**", "project.yml", ".github/workflows/glint.yml", "tools/glint_screenshots.sh"]
+  workflow_dispatch:
+    inputs:
+      screenshots:
+        description: "Sacar capturas en el simulador"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: xcode-27   # macOS 27 + Xcode 27 + SDK de iOS 27
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generar proyecto Xcode
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Compilar (sin firmar)
+        run: |
+          xcodebuild -project Shield.xcodeproj -target Glint -configuration Release \
+            -sdk iphoneos SYMROOT="$PWD/build" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            build | tee build.log | grep -E "error:|warning: .*Glint|BUILD" || true
+          test -d build/Release-iphoneos/Glint.app
+
+      - name: Empaquetar IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Release-iphoneos/Glint.app Payload/
+          zip -qry Glint.ipa Payload
+          ls -lh Glint.ipa
+
+      - name: Publicar release descargable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "glint-${{ github.run_number }}" Glint.ipa \
+            --title "Glint build ${{ github.run_number }}" \
+            --notes "IPA sin firmar. Instálala con Sideloadly (ver README)." --latest=false
+
+      - name: Compilar para el simulador
+        if: github.event_name == 'push' || inputs.screenshots
+        run: |
+          xcodebuild -project Shield.xcodeproj -target Glint -configuration Debug \
+            -sdk iphonesimulator ARCHS=arm64 ONLY_ACTIVE_ARCH=NO SYMROOT="$PWD/simbuild" \
+            CODE_SIGNING_ALLOWED=NO build | grep -E "error:|BUILD" || true
+          test -d simbuild/Debug-iphonesimulator/Glint.app
+
+      - name: Capturas
+        if: github.event_name == 'push' || inputs.screenshots
+        run: bash tools/glint_screenshots.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: glint-screenshots
+          path: screenshots
+          if-no-files-found: ignore

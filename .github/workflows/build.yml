@@ -3,6 +3,7 @@ name: Build iOS app
 on:
   push:
     branches: [main]
+    paths-ignore: ["Glint/**", ".github/workflows/glint.yml", "tools/glint_screenshots.sh", "tools/make_glint_icon.py"]
   workflow_dispatch:
   schedule:
     - cron: "0 6 * * 1"   # cada lunes: recompila con las listas de filtros más recientes

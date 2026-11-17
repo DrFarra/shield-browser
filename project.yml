@@ -46,3 +46,31 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_USER_SCRIPT_SANDBOXING: NO
+  Glint:
+    type: application
+    platform: iOS
+    sources:
+      - path: Glint
+    info:
+      path: Glint/Info.plist
+      properties:
+        CFBundleDisplayName: Glint
+        CFBundleDevelopmentRegion: es
+        CFBundleLocalizations: [es]
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UIApplicationSupportsIndirectInputEvents: true
+        UIRequiresFullScreen: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        ITSAppUsesNonExemptEncryption: false
+        UIBackgroundModes:
+          - audio
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.emilio.glint
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

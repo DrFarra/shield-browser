@@ -8,3 +8,7 @@ Payload/
 .venv/
 .DS_Store
 Shield/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+Glint/Info.plist
+Shield/Info.plist
+simbuild/
+screenshots/
