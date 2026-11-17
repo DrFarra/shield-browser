@@ -248,7 +248,7 @@ struct PlayerControls: View {
             if engine.supportsPiP {
                 icon("pip.enter", label: "Imagen dentro de imagen") { engine.togglePiP() }
             }
-            settingsMenu
+            SettingsMenu(engine: engine, landscape: landscape)
             if landscape && showsChatToggle {
                 icon(chatOpen ? "bubble.left.fill" : "bubble.left", label: chatOpen ? "Ocultar chat" : "Mostrar chat") {
                     onToggleChat()
@@ -322,38 +322,6 @@ struct PlayerControls: View {
         .padding(.leading, 8)
     }
 
-    private var settingsMenu: some View {
-        Menu {
-            Picker(selection: Binding(get: { engine.quality ?? "" }, set: { engine.setQuality($0.isEmpty ? nil : $0) })) {
-                Text("Automática").tag("")
-                ForEach(engine.qualities) { Text($0.label).tag($0.name) }
-            } label: {
-                Label("Calidad", systemImage: "slider.horizontal.3")
-            }
-            if engine.mode != .live {
-                Picker(selection: Binding(get: { engine.rate }, set: { engine.setRate($0) })) {
-                    ForEach([0.5, 0.75, 1, 1.25, 1.5, 2] as [Float], id: \.self) { rate in
-                        Text(rate == 1 ? "Normal" : "\(rate.formatted(.number.locale(Locale(identifier: "es"))))×").tag(rate)
-                    }
-                } label: {
-                    Label("Velocidad", systemImage: "gauge.with.dots.needle.67percent")
-                }
-            }
-            if landscape {
-                Toggle(isOn: Binding(get: { engine.fill }, set: { value in withAnimation { engine.fill = value } })) {
-                    Label("Rellenar pantalla", systemImage: "arrow.up.left.and.arrow.down.right.rectangle")
-                }
-            }
-        } label: {
-            Image(systemName: "gearshape")
-                .font(.system(size: 18, weight: .semibold))
-                .frame(width: 40, height: 40)
-                .contentShape(Rectangle())
-                .shadow(color: .black.opacity(0.4), radius: 4)
-        }
-        .accessibilityLabel("Ajustes de reproducción")
-        .menuOrder(.fixed)
-    }
 
     private func icon(_ name: String, label: String, action: @escaping () -> Void) -> some View {
         Button { act(action) } label: {
@@ -539,5 +507,45 @@ struct LivePill: View {
         }
         .disabled(atEdge)
         .accessibilityLabel(atEdge ? "En vivo" : "Ir al directo")
+    }
+}
+
+/// Calidad, velocidad y relleno. Va en su propia vista para que no se redibuje con
+/// cada tic del reproductor: si no, el menú abierto se refresca y no deja hacer scroll.
+private struct SettingsMenu: View {
+    let engine: PlayerEngine
+    let landscape: Bool
+
+    var body: some View {
+        Menu {
+            Picker(selection: Binding(get: { engine.quality ?? "" }, set: { engine.setQuality($0.isEmpty ? nil : $0) })) {
+                Text("Automática").tag("")
+                ForEach(engine.qualities) { Text($0.label).tag($0.name) }
+            } label: {
+                Label("Calidad", systemImage: "slider.horizontal.3")
+            }
+            if engine.mode != .live {
+                Picker(selection: Binding(get: { engine.rate }, set: { engine.setRate($0) })) {
+                    ForEach([0.5, 0.75, 1, 1.25, 1.5, 2] as [Float], id: \.self) { rate in
+                        Text(rate == 1 ? "Normal" : "\(rate.formatted(.number.locale(Locale(identifier: "es"))))×").tag(rate)
+                    }
+                } label: {
+                    Label("Velocidad", systemImage: "gauge.with.dots.needle.67percent")
+                }
+            }
+            if landscape {
+                Toggle(isOn: Binding(get: { engine.fill }, set: { value in withAnimation { engine.fill = value } })) {
+                    Label("Rellenar pantalla", systemImage: "arrow.up.left.and.arrow.down.right.rectangle")
+                }
+            }
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 18, weight: .semibold))
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
+                .shadow(color: .black.opacity(0.4), radius: 4)
+        }
+        .accessibilityLabel("Ajustes de reproducción")
+        .menuOrder(.fixed)
     }
 }
