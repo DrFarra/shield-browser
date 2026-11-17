@@ -69,6 +69,9 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         UIBackgroundModes:
           - audio
+          - fetch
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.emilio.glint.live
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.emilio.glint

@@ -3,6 +3,8 @@ import SwiftUI
 
 @main
 struct GlintApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @Environment(\.scenePhase) private var scenePhase
     @State private var library = Library()
     @State private var playback = Playback()
     @State private var router = Router()
@@ -22,6 +24,12 @@ struct GlintApp: App {
                 .environment(router)
                 .preferredColorScheme(.dark)
                 .tint(.glint)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { LiveAlerts.schedule() }
+        }
+        .backgroundTask(.appRefresh(LiveAlerts.taskID)) {
+            await LiveAlerts.check()
         }
     }
 }
@@ -54,7 +62,19 @@ struct RootView: View {
 
             PlayerHost()
         }
-        .onAppear { playback.library = library }
+        .onAppear {
+            playback.library = library
+            if let login = AppDelegate.pendingLogin {
+                AppDelegate.pendingLogin = nil
+                playback.play(.live(login))
+            }
+        }
+        // Toque en un aviso de "está en directo"
+        .onReceive(NotificationCenter.default.publisher(for: .openLive)) { note in
+            guard let login = note.object as? String else { return }
+            AppDelegate.pendingLogin = nil
+            playback.play(.live(login))
+        }
         .task { await Demo.run(router: router, playback: playback, library: library) }
     }
 }

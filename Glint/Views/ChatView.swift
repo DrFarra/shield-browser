@@ -50,7 +50,7 @@ struct ChatView: View {
         }
         .overlay {
             if chat.messages.isEmpty {
-                Text("Conectando al chat…")
+                Text("Esperando mensajes…")
                     .font(.footnote)
                     .foregroundStyle(.tertiary)
             }
@@ -78,8 +78,8 @@ struct ChatRow: View {
                 var piece = Text(verbatim: string)
                 if message.isAction { piece = piece.italic().foregroundStyle(message.color) }
                 text = Text("\(text)\(piece)")
-            case .emote(let id, let name):
-                if let image = emotes.image(id) {
+            case .emote(let url, let name):
+                if let image = emotes.image(url) {
                     text = Text("\(text)\(Text(Image(uiImage: image)).baselineOffset(-6))")
                 } else {
                     text = Text("\(text)\(Text(verbatim: name))")

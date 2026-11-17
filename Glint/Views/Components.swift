@@ -183,6 +183,8 @@ struct FollowButton: View {
         let following = library.isFollowing(channel.login)
         Button {
             withAnimation(.snappy) { library.toggleFollow(channel) }
+            // Al seguir el primer canal se piden permisos para avisar cuando empiece directo
+            if library.isFollowing(channel.login) { LiveAlerts.requestPermission() }
         } label: {
             Label(following ? "Siguiendo" : "Seguir", systemImage: following ? "heart.fill" : "heart")
                 .labelStyle(.titleAndIcon)
@@ -267,6 +269,71 @@ extension View {
             case .game(let name): CategoryView(name: name)
             case .history: HistoryView()
             }
+        }
+    }
+}
+
+/// Tarjeta de clip para las filas horizontales.
+struct ClipCard: View {
+    let clip: Twitch.Clip
+    @Environment(Playback.self) private var playback
+
+    var body: some View {
+        Button { playback.play(.clip(clip.slug)) } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                Thumbnail(url: clip.thumbnailURL, corner: 12)
+                    .overlay(alignment: .topLeading) {
+                        if let views = clip.viewCount {
+                            Label(Format.count(views), systemImage: "eye.fill")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 7).padding(.vertical, 4)
+                                .background(.black.opacity(0.65), in: Capsule())
+                                .padding(8)
+                        }
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        Text(Format.clock(Double(clip.durationSeconds ?? 0)))
+                            .font(.caption2.weight(.medium)).monospacedDigit()
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(.black.opacity(0.65), in: Capsule())
+                            .padding(8)
+                    }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(clip.title ?? "")
+                        .font(.footnote.weight(.semibold))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    Text([clip.broadcaster?.name, Format.ago(clip.createdAt)].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(width: 240)
+        }
+        .buttonStyle(PressStyle())
+        .foregroundStyle(.primary)
+    }
+}
+
+/// Fila horizontal de clips con su título.
+struct ClipsRow: View {
+    let title: String
+    let clips: [Twitch.Clip]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SectionHeader(title)
+            ScrollView(.horizontal) {
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(clips) { ClipCard(clip: $0) }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.viewAligned)
+            .contentMargins(.horizontal, 16, for: .scrollContent)
+            .padding(.horizontal, -16)
         }
     }
 }

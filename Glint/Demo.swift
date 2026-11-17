@@ -27,6 +27,10 @@ enum Demo {
             router.tab = .browse
         case "search":
             router.tab = .search
+        case "clip":
+            if let login, let clip = try? await Twitch.clips(channel: login).first {
+                playback.play(.clip(clip.slug))
+            }
         case "history":
             router.home.append(.history)
         case "channel":

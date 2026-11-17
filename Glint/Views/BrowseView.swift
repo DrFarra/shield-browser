@@ -65,6 +65,7 @@ struct CategoryView: View {
     @AppStorage("spanishOnly") private var spanishOnly = true
     @State private var game: Twitch.Game?
     @State private var streams: [Twitch.Stream] = []
+    @State private var clips: [Twitch.Clip] = []
     @State private var loaded = false
     @State private var failure: String?
 
@@ -77,6 +78,12 @@ struct CategoryView: View {
                 } else if loaded, streams.isEmpty {
                     ContentUnavailableView("Nadie en directo", systemImage: "video.slash",
                                            description: Text(spanishOnly ? "Prueba con «Todos» los idiomas." : ""))
+                }
+                if !clips.isEmpty {
+                    ClipsRow(title: "Clips de la semana", clips: clips)
+                }
+                if !streams.isEmpty {
+                    SectionHeader("En directo")
                 }
                 ForEach(streams) { StreamCard(stream: $0) }
             }
@@ -108,7 +115,9 @@ struct CategoryView: View {
 
     private func load() async {
         do {
+            async let clipList = try? Twitch.clips(game: name, spanishOnly: spanishOnly)
             let result = try await Twitch.streams(inGame: name, spanishOnly: spanishOnly)
+            clips = await clipList ?? []
             game = result.game ?? game
             streams = result.streams
             failure = nil

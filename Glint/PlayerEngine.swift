@@ -27,12 +27,17 @@ final class PlayerEngine {
     private(set) var rate: Float = 1
     var fill = false { didSet { layer?.videoGravity = fill ? .resizeAspectFill : .resizeAspect } }
 
+    /// Miniaturas para la barra de un VOD.
+    private(set) var storyboard: Storyboard?
+
     var isLive: Bool { mode != .vod }
     var atLiveEdge: Bool { mode == .live && duration - position < 15 }
     var canRewind: Bool { mode != .live || archiveID != nil }
 
     @ObservationIgnored private var login = ""
     @ObservationIgnored private var videoID = ""
+    /// Un clip se reproduce como un vídeo corto (modo .vod) desde su MP4.
+    @ObservationIgnored private var clipSlug: String?
     @ObservationIgnored private var startedAt: Date?
     @ObservationIgnored private var archiveID: String?
     @ObservationIgnored private var master: URL?
@@ -65,6 +70,11 @@ final class PlayerEngine {
 
     func startVOD(id: String, length: Double, at offset: Double? = nil) {
         videoID = id
+        clipSlug = nil
+        Task { [weak self] in
+            let board = await Storyboard.load(videoID: id)
+            if self?.videoID == id, self?.clipSlug == nil { self?.storyboard = board }
+        }
         startedAt = nil
         archiveID = nil
         duration = length
@@ -86,8 +96,18 @@ final class PlayerEngine {
         load(mode, at: mode == .live ? nil : position)
     }
 
+    func startClip(slug: String, length: Double) {
+        clipSlug = slug
+        videoID = ""
+        startedAt = nil
+        archiveID = nil
+        duration = length
+        load(.vod, at: nil)
+    }
+
     func stop() {
         loadTask?.cancel()
+        storyboard = nil
         player.replaceCurrentItem(with: nil)
         itemObserver = nil
         qualities = []
@@ -108,7 +128,12 @@ final class PlayerEngine {
                 switch newMode {
                 case .live: playlist = try await Twitch.livePlaylist(login)
                 case .archive: playlist = try await Twitch.videoPlaylist(archiveID ?? "")
-                case .vod: playlist = try await Twitch.videoPlaylist(videoID)
+                case .vod:
+                    if let clipSlug {
+                        playlist = try await Twitch.clipPlaylist(clipSlug)
+                    } else {
+                        playlist = try await Twitch.videoPlaylist(videoID)
+                    }
                 }
                 try Task.checkCancellation()
                 master = playlist.url

@@ -18,7 +18,7 @@ struct PlayerHost: View {
         if playback.media != nil {
             GeometryReader { geo in
                 let layout = PlayerLayout(size: geo.size, insets: geo.safeAreaInsets, progress: progress,
-                                          chatOpen: chatOpen && isLive, offset: cardOffset)
+                                          chatOpen: chatOpen && hasChat, offset: cardOffset)
                 content(layout)
                     .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
                     .statusBarHidden(layout.landscape && progress == 0)
@@ -29,9 +29,12 @@ struct PlayerHost: View {
         }
     }
 
-    private var isLive: Bool {
-        if case .live = playback.media { return true }
-        return false
+    /// Directos y VOD tienen chat; los clips no.
+    private var hasChat: Bool {
+        switch playback.media {
+        case .live, .video: true
+        default: false
+        }
     }
 
     @ViewBuilder
@@ -50,7 +53,7 @@ struct PlayerHost: View {
                     .offset(y: layout.full.maxY + layout.progress * 240)
                     .opacity(1 - layout.progress * 2.5)
                     .allowsHitTesting(full)
-            } else if chatOpen, isLive {
+            } else if chatOpen, hasChat {
                 ChatView(chat: playback.chat)
                     .padding(.trailing, layout.insets.trailing)
                     .frame(width: PlayerLayout.chatWidth + layout.insets.trailing,
@@ -77,8 +80,8 @@ struct PlayerHost: View {
                 landscape: layout.landscape,
                 safe: layout.insets,
                 active: layout.progress < 0.01,
-                chatOpen: chatOpen && isLive,
-                showsChatToggle: isLive,
+                chatOpen: chatOpen && hasChat,
+                showsChatToggle: hasChat,
                 onMinimize: { withAnimation(.snappy) { playback.minimized = true } },
                 onFullscreen: { Orientation.set(landscape: !layout.landscape) },
                 onToggleChat: { withAnimation(.snappy) { chatOpen.toggle() } },
@@ -159,11 +162,11 @@ struct PlayerHost: View {
     // MARK: - Textos
 
     private var title: String {
-        playback.channel?.stream?.title ?? playback.video?.title ?? ""
+        playback.channel?.stream?.title ?? playback.video?.title ?? playback.clip?.title ?? ""
     }
 
     private var subtitle: String {
-        playback.channel?.name ?? playback.video?.owner?.name ?? ""
+        playback.channel?.name ?? playback.video?.owner?.name ?? playback.clip?.broadcaster?.name ?? ""
     }
 
     private func openChannel() {
@@ -217,37 +220,85 @@ struct PlayerDetails: View {
     let onOpenChannel: () -> Void
     @Environment(Playback.self) private var playback
     @State private var expanded = false
+    @State private var showVideos = false
 
     var body: some View {
         VStack(spacing: 0) {
             info
             Divider().overlay(Color.white.opacity(0.06))
-            if case .live = playback.media {
+            switch playback.media {
+            case .live:
                 ChatView(chat: playback.chat)
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 14) {
-                        if !playback.moreVideos.isEmpty {
-                            SectionHeader("Más de \(playback.video?.owner?.name ?? "este canal")")
-                        }
-                        ForEach(playback.moreVideos) { VideoRow(video: $0) }
-                    }
-                    .padding(16)
+            case .video:
+                Picker("Mostrar", selection: $showVideos) {
+                    Text("Chat").tag(false)
+                    Text("Más vídeos").tag(true)
                 }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                if showVideos {
+                    moreVideos
+                } else {
+                    ChatView(chat: playback.chat)
+                }
+            case .clip:
+                clipPanel
+            case nil:
+                Spacer()
             }
         }
         .background(Color.black)
+    }
+
+    private var moreVideos: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 14) {
+                if !playback.moreVideos.isEmpty {
+                    SectionHeader("Más de \(owner?.name ?? "este canal")")
+                }
+                ForEach(playback.moreVideos) { VideoRow(video: $0) }
+            }
+            .padding(16)
+        }
+    }
+
+    /// Desde un clip se puede saltar a la emisión completa, justo en ese momento.
+    @ViewBuilder
+    private var clipPanel: some View {
+        VStack(spacing: 16) {
+            if let clip = playback.clip, let videoID = clip.video?.id {
+                Button {
+                    playback.play(.video(videoID), at: Double(clip.videoOffsetSeconds ?? 0))
+                } label: {
+                    Label("Ver en la emisión completa", systemImage: "play.rectangle")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.bordered)
+                .tint(.glint)
+            }
+            Spacer()
+        }
+        .padding(16)
+    }
+
+    /// Dueño del vídeo o clip (en directo se usa el canal).
+    private var owner: Twitch.Broadcaster? {
+        playback.video?.owner ?? playback.clip?.broadcaster
     }
 
     @ViewBuilder
     private var info: some View {
         let channel = playback.channel
         let video = playback.video
-        let ref = channel?.ref ?? video?.owner.map { ChannelRef(login: $0.login, displayName: $0.name, avatar: $0.profileImageURL) }
+        let owner = self.owner
+        let ref = channel?.ref ?? owner.map { ChannelRef(login: $0.login, displayName: $0.name, avatar: $0.profileImageURL) }
 
         HStack(alignment: .top, spacing: 12) {
             Button(action: onOpenChannel) {
-                Avatar(url: channel?.profileImageURL ?? video?.owner?.profileImageURL, size: 40, live: channel?.stream != nil)
+                Avatar(url: channel?.profileImageURL ?? owner?.profileImageURL, size: 40, live: channel?.stream != nil)
             }
             .buttonStyle(PressStyle())
 
@@ -256,7 +307,7 @@ struct PlayerDetails: View {
                     Text(ref?.displayName ?? " ").font(.subheadline.weight(.bold))
                 }
                 .buttonStyle(.plain)
-                Text(channel?.stream?.title ?? video?.title ?? "")
+                Text(channel?.stream?.title ?? video?.title ?? playback.clip?.title ?? "")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(expanded ? 6 : 1)
@@ -285,6 +336,10 @@ struct PlayerDetails: View {
         }
         if let video = playback.video {
             return [video.game?.title, Format.ago(video.createdAt), video.viewCount.map { "\(Format.count($0)) vistas" }]
+                .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        }
+        if let clip = playback.clip {
+            return [clip.curator.map { "Clip de \($0.name)" }, clip.viewCount.map { "\(Format.count($0)) vistas" }, Format.ago(clip.createdAt)]
                 .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
         }
         return ""

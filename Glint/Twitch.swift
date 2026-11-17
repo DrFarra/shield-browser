@@ -46,6 +46,7 @@ enum Twitch {
         let login: String
         let displayName: String?
         let profileImageURL: String?
+        var userID: String? = nil
         var name: String { displayName ?? login }
     }
 
@@ -80,8 +81,42 @@ enum Twitch {
         let owner: Broadcaster?
     }
 
+    struct Clip: Decodable, Identifiable {
+        let id: String
+        let slug: String
+        let title: String?
+        let viewCount: Int?
+        let durationSeconds: Int?
+        let createdAt: Date?
+        let thumbnailURL: String?
+        let curator: Broadcaster?
+        let game: Game?
+        let broadcaster: Broadcaster?
+        let video: VideoRef?
+        let videoOffsetSeconds: Int?
+    }
+
+    struct Comment: Decodable {
+        let contentOffsetSeconds: Int?
+        let commenter: Broadcaster?
+        let message: Body?
+
+        struct Body: Decodable {
+            let userColor: String?
+            let fragments: [Fragment]?
+        }
+
+        struct Fragment: Decodable {
+            let text: String?
+            let emote: Emote?
+        }
+
+        struct Emote: Decodable { let emoteID: String? }
+    }
+
     struct Channel: Decodable, Identifiable {
         let login: String
+        let userID: String?
         let displayName: String?
         let description: String?
         let profileImageURL: String?
@@ -98,13 +133,18 @@ enum Twitch {
     private static let streamFields = """
         id title viewersCount createdAt previewImageURL(width: 640, height: 360) \
         game { name displayName } \
-        broadcaster { login displayName profileImageURL(width: 70) } \
+        broadcaster { userID: id login displayName profileImageURL(width: 70) } \
         archiveVideo { id }
         """
     private static let gameFields = "name displayName boxArtURL(width: 285, height: 380) viewersCount"
     private static let videoFields = """
         id title lengthSeconds createdAt viewCount previewThumbnailURL(width: 320, height: 180) \
-        game { name displayName } owner { login displayName profileImageURL(width: 70) }
+        game { name displayName } owner { userID: id login displayName profileImageURL(width: 70) }
+        """
+    private static let clipFields = """
+        id slug title viewCount durationSeconds createdAt thumbnailURL(width: 480, height: 272) \
+        curator { login displayName } game { name displayName } \
+        broadcaster { userID: id login displayName profileImageURL(width: 70) } video { id } videoOffsetSeconds
         """
 
     private static func languageOption(_ spanishOnly: Bool) -> String {
@@ -142,7 +182,7 @@ enum Twitch {
         struct R: Decodable { let user: Channel? }
         let videos = withVideos ? "videos(first: 30, type: ARCHIVE, sort: TIME) { edges { node { \(videoFields) } } }" : ""
         let r: R = try await query("""
-            query($login: String!) { user(login: $login) { login displayName description \
+            query($login: String!) { user(login: $login) { userID: id login displayName description \
             profileImageURL(width: 300) bannerImageURL followers { totalCount } \
             stream { \(streamFields) } \(videos) } }
             """, ["login": login])
@@ -176,6 +216,74 @@ enum Twitch {
         struct R: Decodable { let video: Video? }
         let r: R = try await query("query($id: ID!) { video(id: $id) { \(videoFields) } }", ["id": id])
         return r.video
+    }
+
+    // MARK: - Clips
+
+    /// Clips más vistos del último mes de un canal.
+    static func clips(channel login: String) async throws -> [Clip] {
+        struct U: Decodable { let clips: Connection<Clip>? }
+        struct R: Decodable { let user: U? }
+        let r: R = try await query("""
+            query($login: String!) { user(login: $login) { \
+            clips(first: 20, criteria: {period: LAST_MONTH, sort: VIEWS_DESC}) { edges { node { \(clipFields) } } } } }
+            """, ["login": login])
+        return r.user?.clips?.nodes ?? []
+    }
+
+    /// Clips más vistos de la semana en una categoría.
+    static func clips(game name: String, spanishOnly: Bool) async throws -> [Clip] {
+        struct G: Decodable { let clips: Connection<Clip>? }
+        struct R: Decodable { let game: G? }
+        let languages = spanishOnly ? ", languages: [ES]" : ""
+        let r: R = try await query("""
+            query($name: String!) { game(name: $name) { \
+            clips(first: 20, criteria: {period: LAST_WEEK, sort: VIEWS_DESC\(languages)}) { edges { node { \(clipFields) } } } } }
+            """, ["name": name])
+        return r.game?.clips?.nodes ?? []
+    }
+
+    static func clip(_ slug: String) async throws -> Clip? {
+        struct R: Decodable { let clip: Clip? }
+        let r: R = try await query("query($slug: ID!) { clip(slug: $slug) { \(clipFields) } }", ["slug": slug])
+        return r.clip
+    }
+
+    /// Los clips son MP4 sueltos (uno por calidad) firmados con un token.
+    static func clipPlaylist(_ slug: String) async throws -> Playlist {
+        struct T: Decodable { let value: String; let signature: String }
+        struct Q: Decodable { let quality: String?; let frameRate: Double?; let sourceURL: String? }
+        struct C: Decodable { let playbackAccessToken: T?; let videoQualities: [Q]? }
+        struct R: Decodable { let clip: C? }
+        let r: R = try await query("""
+            query($slug: ID!) { clip(slug: $slug) { playbackAccessToken(params: {platform: "web", \
+            playerBackend: "mediaplayer", playerType: "site"}) { value signature } videoQualities { quality frameRate sourceURL } } }
+            """, ["slug": slug])
+        guard let t = r.clip?.playbackAccessToken else { throw Failure(message: "Twitch no dio acceso a este clip") }
+        let qualities = (r.clip?.videoQualities ?? []).compactMap { q -> Quality? in
+            guard let source = q.sourceURL, let url = URL(string: "\(source)?sig=\(t.signature)&token=\(escape(t.value))") else { return nil }
+            let fps = (q.frameRate ?? 30) > 40 ? "60" : ""
+            return Quality(name: "\(q.quality ?? "?")p\(fps)", url: url)
+        }
+        guard let best = qualities.first else { throw Failure(message: "Este clip ya no existe") }
+        return Playlist(url: best.url, qualities: qualities)
+    }
+
+    // MARK: - Chat de los VOD
+
+    /// Mensajes del chat de un VOD desde un segundo dado (Twitch devuelve una página de ~1 minuto).
+    static func comments(video id: String, at offset: Int) async throws -> (comments: [Comment], more: Bool) {
+        struct P: Decodable { let hasNextPage: Bool? }
+        struct C: Decodable { let edges: [Connection<Comment>.Edge]?; let pageInfo: P? }
+        struct V: Decodable { let comments: C? }
+        struct R: Decodable { let video: V? }
+        let r: R = try await query("""
+            query($id: ID!, $t: Int) { video(id: $id) { comments(contentOffsetSeconds: $t) { edges { node { \
+            contentOffsetSeconds commenter { login displayName } \
+            message { userColor fragments { text emote { emoteID } } } } } pageInfo { hasNextPage } } } }
+            """, ["id": id, "t": offset])
+        let comments = r.video?.comments
+        return (comments?.edges?.compactMap(\.node) ?? [], comments?.pageInfo?.hasNextPage ?? false)
     }
 
     // MARK: - Reproducción

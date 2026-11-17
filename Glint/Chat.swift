@@ -5,7 +5,7 @@ import UIKit
 struct ChatMessage: Identifiable {
     enum Part {
         case text(String)
-        case emote(id: String, name: String)
+        case emote(url: String, name: String)
     }
 
     let id = UUID()
@@ -16,7 +16,7 @@ struct ChatMessage: Identifiable {
 }
 
 /// Chat de solo lectura: IRC de Twitch como usuario anónimo (justinfan), que
-/// no necesita cuenta.
+/// no necesita cuenta. En un VOD reproduce el chat original al ritmo del vídeo.
 @MainActor @Observable
 final class ChatClient {
     private(set) var messages: [ChatMessage] = []
@@ -29,6 +29,107 @@ final class ChatClient {
     @ObservationIgnored private var incoming: [ChatMessage] = []
     @ObservationIgnored private var held: [ChatMessage] = []
     @ObservationIgnored private var flushTask: Task<Void, Never>?
+    /// Emotes de 7TV, BTTV y FFZ del canal: nombre → URL.
+    @ObservationIgnored private var extraEmotes: [String: String] = [:]
+    @ObservationIgnored private var emoteTask: Task<Void, Never>?
+
+    func loadEmotes(channelID: String?) {
+        emoteTask?.cancel()
+        emoteTask = Task { [weak self] in
+            let emotes = await ThirdPartyEmotes.load(channelID: channelID)
+            guard !Task.isCancelled else { return }
+            self?.extraEmotes = emotes
+        }
+    }
+
+    /// Chat de un VOD: pide los mensajes por tramos y los muestra cuando el vídeo llega a su segundo.
+    func replay(videoID: String, position: @escaping () -> Double) {
+        disconnect()
+        loop = Task { [weak self] in
+            var queue: [(time: Double, message: ChatMessage)] = []
+            var cursor = 0.0, fetchedUntil = -1.0, last = -100.0, finished = false
+            while !Task.isCancelled {
+                guard let self else { return }
+                let now = position()
+                // Salto en el vídeo: se empieza de nuevo desde ahí, con los últimos 20 s de contexto
+                if now < last - 2 || now > last + 20 {
+                    queue = []
+                    messages = []
+                    held = []
+                    pendingCount = 0
+                    cursor = max(0, now - 20)
+                    fetchedUntil = cursor - 1
+                    finished = false
+                }
+                last = now
+                if !finished, fetchedUntil < now + 30,
+                   let page = try? await Twitch.comments(video: videoID, at: Int(cursor)) {
+                    let fresh = page.comments.filter { Double($0.contentOffsetSeconds ?? 0) > fetchedUntil }
+                    queue += fresh.map { (time: Double($0.contentOffsetSeconds ?? 0), message: message(from: $0)) }
+                    if let end = fresh.last?.contentOffsetSeconds {
+                        fetchedUntil = Double(end)
+                        cursor = fetchedUntil + 1
+                    } else if page.more {
+                        cursor += 30
+                    } else {
+                        finished = true
+                    }
+                }
+                let due = queue.prefix { $0.time <= now }.count
+                if due > 0 {
+                    incoming += queue.prefix(due).map { $0.message }
+                    queue.removeFirst(due)
+                    flush()
+                }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+    }
+
+    private func message(from comment: Twitch.Comment) -> ChatMessage {
+        let login = comment.commenter?.login ?? ""
+        let parts: [ChatMessage.Part] = (comment.message?.fragments ?? []).map { fragment in
+            if let id = fragment.emote?.emoteID {
+                return .emote(url: Self.twitchEmoteURL(id), name: fragment.text ?? "")
+            }
+            return .text(fragment.text ?? "")
+        }
+        return expand(ChatMessage(name: comment.commenter?.name ?? "?",
+                                  color: Self.color(comment.message?.userColor.map { Substring($0) }, name: login),
+                                  parts: parts, isAction: false))
+    }
+
+    /// Cambia las palabras que son emotes de 7TV/BTTV/FFZ por su imagen.
+    private func expand(_ message: ChatMessage) -> ChatMessage {
+        guard !extraEmotes.isEmpty else { return message }
+        var parts: [ChatMessage.Part] = []
+        var changed = false
+        for part in message.parts {
+            guard case .text(let text) = part else {
+                parts.append(part)
+                continue
+            }
+            var run = ""
+            for (i, word) in text.split(separator: " ", omittingEmptySubsequences: false).enumerated() {
+                let separator = i == 0 ? "" : " "
+                if let url = extraEmotes[String(word)] {
+                    run += separator
+                    if !run.isEmpty { parts.append(.text(run)) }
+                    run = ""
+                    parts.append(.emote(url: url, name: String(word)))
+                    changed = true
+                } else {
+                    run += separator + word
+                }
+            }
+            if !run.isEmpty { parts.append(.text(run)) }
+        }
+        return changed ? ChatMessage(name: message.name, color: message.color, parts: parts, isAction: message.isAction) : message
+    }
+
+    nonisolated static func twitchEmoteURL(_ id: String) -> String {
+        "https://static-cdn.jtvnw.net/emoticons/v2/\(id)/static/dark/2.0"
+    }
 
     func connect(_ channel: String) {
         disconnect()
@@ -42,6 +143,8 @@ final class ChatClient {
 
     func disconnect() {
         loop?.cancel()
+        emoteTask?.cancel()
+        extraEmotes = [:]
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
         messages = []
@@ -66,7 +169,7 @@ final class ChatClient {
                 if line.hasPrefix("PING") {
                     try? await ws.send(.string("PONG :tmi.twitch.tv"))
                 } else if let parsed = Self.parse(line) {
-                    incoming.append(parsed)
+                    incoming.append(expand(parsed))
                 }
             }
             scheduleFlush()
@@ -148,7 +251,7 @@ final class ChatClient {
         var cursor = 0
         for r in ranges.sorted(by: { $0.start < $1.start }) where r.start >= cursor && r.start <= r.end && r.end < scalars.count {
             if r.start > cursor { parts.append(.text(string(scalars[cursor..<r.start]))) }
-            parts.append(.emote(id: r.id, name: string(scalars[r.start...r.end])))
+            parts.append(.emote(url: twitchEmoteURL(r.id), name: string(scalars[r.start...r.end])))
             cursor = r.end + 1
         }
         if cursor < scalars.count { parts.append(.text(string(scalars[cursor...]))) }
@@ -173,25 +276,27 @@ final class ChatClient {
     }
 }
 
-/// Imágenes de emotes de Twitch, descargadas una vez y compartidas.
+/// Imágenes de emotes (Twitch, 7TV, BTTV, FFZ), descargadas una vez y compartidas.
+/// Las animadas se muestran con su primer fotograma.
 @MainActor @Observable
 final class EmoteImages {
     static let shared = EmoteImages()
     private(set) var images: [String: UIImage] = [:]
     @ObservationIgnored private var requested: Set<String> = []
 
-    func image(_ id: String) -> UIImage? {
-        if let image = images[id] { return image }
-        if requested.insert(id).inserted {
-            Task { await load(id) }
+    func image(_ url: String) -> UIImage? {
+        if let image = images[url] { return image }
+        if requested.insert(url).inserted {
+            Task { await load(url) }
         }
         return nil
     }
 
-    private func load(_ id: String) async {
-        guard let url = URL(string: "https://static-cdn.jtvnw.net/emoticons/v2/\(id)/static/dark/2.0"),
-              let result = try? await URLSession.shared.data(from: url),
-              let image = UIImage(data: result.0, scale: 2.5) else { return }
-        images[id] = image
+    private func load(_ link: String) async {
+        guard let url = URL(string: link),
+              let data = try? await URLSession.shared.data(from: url).0,
+              let image = UIImage(data: data)?.cgImage else { return }
+        // Todas a la altura de una línea de texto, sea cual sea su tamaño original
+        images[link] = UIImage(cgImage: image, scale: max(1, CGFloat(image.height) / 24), orientation: .up)
     }
 }

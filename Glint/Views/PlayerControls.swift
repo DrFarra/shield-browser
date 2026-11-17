@@ -30,6 +30,8 @@ struct PlayerControls: View {
     @State private var panOrigin: Double = 0
     @State private var jump: Jump?
     @State private var jumpTask: Task<Void, Never>?
+    @State private var lastTap = Date.distantPast
+    @State private var lastTapZone = 0
 
     private struct Jump: Equatable {
         var forward: Bool
@@ -57,7 +59,7 @@ struct PlayerControls: View {
                 }
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: visible)
+        .animation(.easeOut(duration: 0.12), value: visible)
         .sensoryFeedback(.impact(weight: .light), trigger: jump?.seconds)
         .onChange(of: engine.isPlaying) { _, playing in
             if playing { scheduleHide() } else { show(keep: true) }
@@ -70,11 +72,8 @@ struct PlayerControls: View {
     private func gestureLayer(width: CGFloat) -> some View {
         Color.clear
             .contentShape(Rectangle())
-            .gesture(
-                SpatialTapGesture(count: 2)
-                    .onEnded { doubleTap(at: $0.location.x / max(width, 1)) }
-                    .exclusively(before: TapGesture().onEnded { toggleVisible() })
-            )
+            // Un solo reconocedor de toques: así no hay que esperar a descartar un doble toque
+            .gesture(SpatialTapGesture().onEnded { tap(at: $0.location.x / max(width, 1)) })
             .simultaneousGesture(
                 DragGesture(minimumDistance: 14, coordinateSpace: .global)
                     .onChanged { pan($0, width: width) }
@@ -87,15 +86,33 @@ struct PlayerControls: View {
             )
     }
 
-    private func doubleTap(at x: CGFloat) {
-        guard message == nil else { return }
-        if x < 0.38 {
-            seekJump(forward: false)
-        } else if x > 0.62 {
-            seekJump(forward: true)
-        } else if landscape {
+    /// El primer toque muestra/oculta los controles al instante. Si llega un segundo
+    /// toque rápido en un lateral, se deshace eso y se salta 10 s; mientras se ve el
+    /// indicador de salto, cada toque más en el mismo lado suma otros 10 s.
+    private func tap(at x: CGFloat) {
+        let zone = x < 0.38 ? -1 : x > 0.62 ? 1 : 0
+        let now = Date()
+        let isDouble = now.timeIntervalSince(lastTap) < 0.3 && zone == lastTapZone
+        lastTap = isDouble ? .distantPast : now
+        lastTapZone = zone
+
+        if zone != 0, message == nil {
+            let forward = zone > 0
+            if jump?.forward == forward {
+                seekJump(forward: forward)
+                return
+            }
+            if isDouble {
+                toggleVisible()
+                seekJump(forward: forward)
+                return
+            }
+        } else if zone == 0, isDouble, landscape {
+            toggleVisible()
             withAnimation(.snappy) { engine.fill.toggle() }
+            return
         }
+        toggleVisible()
     }
 
     private func seekJump(forward: Bool) {
@@ -347,8 +364,18 @@ struct PlayerControls: View {
 
     private func scrubReadout(_ value: Double) -> some View {
         VStack(spacing: 2) {
+            // Miniatura del punto donde está el dedo (solo VOD: Twitch no las da en directo)
+            if let frame = engine.storyboard?.frame(at: value) {
+                Image(uiImage: frame)
+                    .resizable()
+                    .aspectRatio(16 / 9, contentMode: .fill)
+                    .frame(width: landscape ? 240 : 168, height: landscape ? 135 : 94.5)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.white.opacity(0.8), lineWidth: 1.5))
+                    .padding(.bottom, 4)
+            }
             Text(Format.clock(value))
-                .font(.system(size: 32, weight: .semibold))
+                .font(.system(size: engine.storyboard == nil ? 32 : 20, weight: .semibold))
             if engine.isLive {
                 let behind = engine.duration - value
                 Text(behind < 15 ? "En vivo" : "−\(Format.clock(behind)) del directo")

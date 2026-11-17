@@ -6,6 +6,7 @@ struct ChannelView: View {
     @State private var channel: Twitch.Channel?
     @State private var failure: String?
     @State private var showFullBio = false
+    @State private var clips: [Twitch.Clip] = []
 
     var body: some View {
         ScrollView {
@@ -33,6 +34,11 @@ struct ChannelView: View {
                     StreamCard(stream: stream.withBroadcaster(channel))
                 }
                 .padding(.horizontal, 16)
+            }
+
+            if !clips.isEmpty {
+                ClipsRow(title: "Clips del mes", clips: clips)
+                    .padding(.horizontal, 16)
             }
 
             let videos = channel.videos?.nodes ?? []
@@ -91,7 +97,9 @@ struct ChannelView: View {
 
     private func load() async {
         do {
+            async let clipList = try? Twitch.clips(channel: login)
             channel = try await Twitch.channel(login, withVideos: true)
+            clips = await clipList ?? []
             failure = channel == nil ? "Este canal no existe" : nil
         } catch {
             failure = error.localizedDescription
@@ -106,7 +114,7 @@ extension Twitch.Stream {
         return Twitch.Stream(id: id, title: title, viewersCount: viewersCount, createdAt: createdAt,
                              previewImageURL: previewImageURL, game: game,
                              broadcaster: Twitch.Broadcaster(login: channel.login, displayName: channel.displayName,
-                                                             profileImageURL: channel.profileImageURL),
+                                                             profileImageURL: channel.profileImageURL, userID: channel.userID),
                              archiveVideo: archiveVideo)
     }
 }

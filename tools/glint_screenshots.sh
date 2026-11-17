@@ -37,4 +37,5 @@ shot channel 10
 shot player 18
 shot paused 16
 shot mini 20
-shot vod 18
+shot vod 24
+shot clip 14
