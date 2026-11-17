@@ -80,7 +80,7 @@ struct ChatRow: View {
                 text = Text("\(text)\(piece)")
             case .emote(let url, let name):
                 if let image = emotes.image(url) {
-                    text = Text("\(text)\(Text(Image(uiImage: image)).baselineOffset(-6))")
+                    text = Text("\(text)\(Text(Image(uiImage: image)).baselineOffset(-5))")
                 } else {
                     text = Text("\(text)\(Text(verbatim: name))")
                 }

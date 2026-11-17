@@ -13,22 +13,36 @@ struct ChatMessage: Identifiable {
     let color: Color
     let parts: [Part]
     let isAction: Bool
+
+    var emoteURLs: [String] {
+        parts.compactMap { part in
+            if case .emote(let url, _) = part { return url }
+            return nil
+        }
+    }
 }
 
 /// Chat de solo lectura: IRC de Twitch como usuario anónimo (justinfan), que
 /// no necesita cuenta. En un VOD reproduce el chat original al ritmo del vídeo.
+///
+/// Para que corra suave: cada mensaje espera a que sus emotes estén descargados
+/// (así nunca se ve el nombre del emote y luego la imagen), y los mensajes salen a
+/// ritmo constante en vez de a ráfagas.
 @MainActor @Observable
 final class ChatClient {
     private(set) var messages: [ChatMessage] = []
     private(set) var pendingCount = 0
     /// Mientras el usuario lee mensajes antiguos, los nuevos esperan aparte.
-    var paused = false { didSet { if !paused, oldValue { flush() } } }
+    var paused = false { didSet { if !paused, oldValue { releaseHeld() } } }
 
     @ObservationIgnored private var socket: URLSessionWebSocketTask?
     @ObservationIgnored private var loop: Task<Void, Never>?
-    @ObservationIgnored private var incoming: [ChatMessage] = []
+    @ObservationIgnored private var pump: Task<Void, Never>?
+    /// Recibidos, en orden de llegada, esperando a sus emotes.
+    @ObservationIgnored private var staged: [(message: ChatMessage, arrived: Date)] = []
+    /// Listos para mostrarse; se van soltando poco a poco.
+    @ObservationIgnored private var ready: [ChatMessage] = []
     @ObservationIgnored private var held: [ChatMessage] = []
-    @ObservationIgnored private var flushTask: Task<Void, Never>?
     /// Emotes de 7TV, BTTV y FFZ del canal: nombre → URL.
     @ObservationIgnored private var extraEmotes: [String: String] = [:]
     @ObservationIgnored private var emoteTask: Task<Void, Never>?
@@ -42,30 +56,44 @@ final class ChatClient {
         }
     }
 
-    /// Chat de un VOD: pide los mensajes por tramos y los muestra cuando el vídeo llega a su segundo.
+    func connect(_ channel: String) {
+        disconnect()
+        startPump()
+        loop = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.run(channel.lowercased())
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
+    }
+
+    /// Chat de un VOD: pide los mensajes por tramos (~30 s por delante, con sus
+    /// emotes ya descargándose) y los suelta cuando el vídeo llega a su segundo.
     func replay(videoID: String, position: @escaping () -> Double) {
         disconnect()
+        startPump()
         loop = Task { [weak self] in
             var queue: [(time: Double, message: ChatMessage)] = []
-            var cursor = 0.0, fetchedUntil = -1.0, last = -100.0, finished = false
+            var cursor = 0.0, fetchedUntil = -1.0, last = -100.0
+            var finished = false, jumped = false
             while !Task.isCancelled {
                 guard let self else { return }
                 let now = position()
-                // Salto en el vídeo: se empieza de nuevo desde ahí, con los últimos 20 s de contexto
                 if now < last - 2 || now > last + 20 {
+                    // Salto en el vídeo: se pide el chat desde ahí, con 20 s de contexto
                     queue = []
-                    messages = []
-                    held = []
-                    pendingCount = 0
                     cursor = max(0, now - 20)
                     fetchedUntil = cursor - 1
                     finished = false
+                    jumped = true
                 }
                 last = now
                 if !finished, fetchedUntil < now + 30,
                    let page = try? await Twitch.comments(video: videoID, at: Int(cursor)) {
                     let fresh = page.comments.filter { Double($0.contentOffsetSeconds ?? 0) > fetchedUntil }
-                    queue += fresh.map { (time: Double($0.contentOffsetSeconds ?? 0), message: message(from: $0)) }
+                    let items = fresh.map { (time: Double($0.contentOffsetSeconds ?? 0), message: message(from: $0)) }
+                    for item in items { EmoteImages.shared.prefetch(item.message.emoteURLs) }
+                    queue += items
                     if let end = fresh.last?.contentOffsetSeconds {
                         fetchedUntil = Double(end)
                         cursor = fetchedUntil + 1
@@ -76,15 +104,111 @@ final class ChatClient {
                     }
                 }
                 let due = queue.prefix { $0.time <= now }.count
-                if due > 0 {
-                    incoming += queue.prefix(due).map { $0.message }
+                if jumped, fetchedUntil >= now || finished {
+                    // Se cambia el chat entero de una vez: sin vaciarlo antes ni ver cómo se rellena
+                    staged = []
+                    ready = []
+                    held = []
+                    pendingCount = 0
+                    messages = queue.prefix(due).map { $0.message }
                     queue.removeFirst(due)
-                    flush()
+                    jumped = false
+                } else if !jumped {
+                    for item in queue.prefix(due) { receive(item.message) }
+                    queue.removeFirst(due)
                 }
-                try? await Task.sleep(for: .milliseconds(500))
+                try? await Task.sleep(for: .milliseconds(250))
             }
         }
     }
+
+    func disconnect() {
+        loop?.cancel()
+        pump?.cancel()
+        emoteTask?.cancel()
+        extraEmotes = [:]
+        socket?.cancel(with: .goingAway, reason: nil)
+        socket = nil
+        messages = []
+        staged = []
+        ready = []
+        held = []
+        pendingCount = 0
+        paused = false
+    }
+
+    private func run(_ channel: String) async {
+        let ws = URLSession.shared.webSocketTask(with: URL(string: "wss://irc-ws.chat.twitch.tv:443")!)
+        socket = ws
+        ws.resume()
+        for line in ["CAP REQ :twitch.tv/tags twitch.tv/commands", "PASS SCHMOOPIIE",
+                     "NICK justinfan\(Int.random(in: 10_000...99_999))", "JOIN #\(channel)"] {
+            try? await ws.send(.string(line))
+        }
+        while !Task.isCancelled {
+            guard let message = try? await ws.receive() else { break }
+            guard case .string(let text) = message else { continue }
+            for line in text.components(separatedBy: "\r\n") where !line.isEmpty {
+                if line.hasPrefix("PING") {
+                    try? await ws.send(.string("PONG :tmi.twitch.tv"))
+                } else if let parsed = Self.parse(line) {
+                    receive(expand(parsed))
+                }
+            }
+        }
+        ws.cancel()
+    }
+
+    // MARK: - Ritmo del chat
+
+    private func receive(_ message: ChatMessage) {
+        EmoteImages.shared.prefetch(message.emoteURLs)
+        staged.append((message: message, arrived: Date()))
+    }
+
+    private func startPump() {
+        pump?.cancel()
+        pump = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+                self?.step()
+            }
+        }
+    }
+
+    private func step() {
+        let images = EmoteImages.shared
+        // Sale cuando sus emotes ya están; si una imagen tarda más de 1,2 s, sale igual para no atascar el chat
+        while let first = staged.first,
+              first.message.emoteURLs.allSatisfy({ images.isReady($0) }) || first.arrived.timeIntervalSinceNow < -1.2 {
+            ready.append(first.message)
+            staged.removeFirst()
+        }
+        guard !ready.isEmpty else { return }
+        // Un quinto de lo pendiente cada 0,1 s: una ráfaga de 20 mensajes entra en ~0,5 s, sin saltos
+        let count = max(1, ready.count / 5)
+        let batch = ready.prefix(count)
+        ready.removeFirst(count)
+        if paused {
+            held += batch
+            if held.count > 300 { held.removeFirst(held.count - 300) }
+            pendingCount = held.count
+        } else {
+            withAnimation(.easeOut(duration: 0.2)) {
+                messages += batch
+                if messages.count > 200 { messages.removeFirst(messages.count - 200) }
+            }
+        }
+    }
+
+    private func releaseHeld() {
+        messages += held
+        if messages.count > 200 { messages.removeFirst(messages.count - 200) }
+        held = []
+        pendingCount = 0
+    }
+
+    // MARK: - Mensajes
 
     private func message(from comment: Twitch.Comment) -> ChatMessage {
         let login = comment.commenter?.login ?? ""
@@ -129,76 +253,6 @@ final class ChatClient {
 
     nonisolated static func twitchEmoteURL(_ id: String) -> String {
         "https://static-cdn.jtvnw.net/emoticons/v2/\(id)/static/dark/2.0"
-    }
-
-    func connect(_ channel: String) {
-        disconnect()
-        loop = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.run(channel.lowercased())
-                try? await Task.sleep(for: .seconds(3))
-            }
-        }
-    }
-
-    func disconnect() {
-        loop?.cancel()
-        emoteTask?.cancel()
-        extraEmotes = [:]
-        socket?.cancel(with: .goingAway, reason: nil)
-        socket = nil
-        messages = []
-        incoming = []
-        held = []
-        pendingCount = 0
-        paused = false
-    }
-
-    private func run(_ channel: String) async {
-        let ws = URLSession.shared.webSocketTask(with: URL(string: "wss://irc-ws.chat.twitch.tv:443")!)
-        socket = ws
-        ws.resume()
-        for line in ["CAP REQ :twitch.tv/tags twitch.tv/commands", "PASS SCHMOOPIIE",
-                     "NICK justinfan\(Int.random(in: 10_000...99_999))", "JOIN #\(channel)"] {
-            try? await ws.send(.string(line))
-        }
-        while !Task.isCancelled {
-            guard let message = try? await ws.receive() else { break }
-            guard case .string(let text) = message else { continue }
-            for line in text.components(separatedBy: "\r\n") where !line.isEmpty {
-                if line.hasPrefix("PING") {
-                    try? await ws.send(.string("PONG :tmi.twitch.tv"))
-                } else if let parsed = Self.parse(line) {
-                    incoming.append(expand(parsed))
-                }
-            }
-            scheduleFlush()
-        }
-        ws.cancel()
-    }
-
-    // Agrupa los mensajes cada 0,25 s: en canales grandes llegan decenas por segundo.
-    private func scheduleFlush() {
-        guard flushTask == nil, !incoming.isEmpty else { return }
-        flushTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(250))
-            self?.flushTask = nil
-            self?.flush()
-        }
-    }
-
-    private func flush() {
-        if paused {
-            held.append(contentsOf: incoming)
-            if held.count > 300 { held.removeFirst(held.count - 300) }
-            pendingCount = held.count
-        } else {
-            messages.append(contentsOf: held + incoming)
-            if messages.count > 150 { messages.removeFirst(messages.count - 150) }
-            held = []
-            pendingCount = 0
-        }
-        incoming = []
     }
 
     // MARK: - IRC
@@ -277,26 +331,36 @@ final class ChatClient {
 }
 
 /// Imágenes de emotes (Twitch, 7TV, BTTV, FFZ), descargadas una vez y compartidas.
-/// Las animadas se muestran con su primer fotograma.
-@MainActor @Observable
+/// Las animadas se muestran con su primer fotograma. No avisa a las vistas al
+/// terminar una descarga: el chat solo muestra mensajes con sus emotes ya listos,
+/// así una imagen nueva no redibuja (ni mueve) los mensajes que ya están en pantalla.
+@MainActor
 final class EmoteImages {
     static let shared = EmoteImages()
-    private(set) var images: [String: UIImage] = [:]
-    @ObservationIgnored private var requested: Set<String> = []
+    private var images: [String: UIImage] = [:]
+    private var failed: Set<String> = []
+    private var loading: Set<String> = []
 
-    func image(_ url: String) -> UIImage? {
-        if let image = images[url] { return image }
-        if requested.insert(url).inserted {
+    func image(_ url: String) -> UIImage? { images[url] }
+
+    /// Descargada, o falló (entonces se muestra su nombre).
+    func isReady(_ url: String) -> Bool { images[url] != nil || failed.contains(url) }
+
+    func prefetch(_ urls: [String]) {
+        for url in urls where !isReady(url) && loading.insert(url).inserted {
             Task { await load(url) }
         }
-        return nil
     }
 
     private func load(_ link: String) async {
+        defer { loading.remove(link) }
         guard let url = URL(string: link),
               let data = try? await URLSession.shared.data(from: url).0,
-              let image = UIImage(data: data)?.cgImage else { return }
+              let image = UIImage(data: data)?.cgImage else {
+            failed.insert(link)
+            return
+        }
         // Todas a la altura de una línea de texto, sea cual sea su tamaño original
-        images[link] = UIImage(cgImage: image, scale: max(1, CGFloat(image.height) / 24), orientation: .up)
+        images[link] = UIImage(cgImage: image, scale: max(1, CGFloat(image.height) / 22), orientation: .up)
     }
 }
