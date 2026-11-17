@@ -65,6 +65,10 @@ struct PlayerControls: View {
             if playing { scheduleHide() } else { show(keep: true) }
         }
         .onAppear { scheduleHide() }
+        .onChange(of: engine.demoScrub) { _, value in
+            scrub = value
+            if value != nil { show(keep: true) }
+        }
     }
 
     // MARK: - Gestos
@@ -217,7 +221,7 @@ struct PlayerControls: View {
             if message == nil {
                 centerButtons
                     .opacity(scrub == nil ? 1 : 0)
-                if let scrub {
+                if let scrub, engine.storyboard == nil {
                     scrubReadout(scrub)
                 }
             }
@@ -293,7 +297,9 @@ struct PlayerControls: View {
         return HStack(spacing: 10) {
             Text(Format.clock(shown))
                 .frame(width: 62, alignment: .leading)
-            Scrubber(value: shown, total: engine.duration, enabled: engine.canRewind && message == nil) { value in
+            Scrubber(value: shown, total: engine.duration, enabled: engine.canRewind && message == nil,
+                     preview: scrub != nil && engine.storyboard != nil ? Scrubber.Preview(
+                        image: engine.storyboard?.frame(at: shown), width: landscape ? 220 : 160) : nil) { value in
                 scrub = value
                 show(keep: true)
             } onEnded: { value in
@@ -364,18 +370,8 @@ struct PlayerControls: View {
 
     private func scrubReadout(_ value: Double) -> some View {
         VStack(spacing: 2) {
-            // Miniatura del punto donde está el dedo (solo VOD: Twitch no las da en directo)
-            if let frame = engine.storyboard?.frame(at: value) {
-                Image(uiImage: frame)
-                    .resizable()
-                    .aspectRatio(16 / 9, contentMode: .fill)
-                    .frame(width: landscape ? 240 : 168, height: landscape ? 135 : 94.5)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.white.opacity(0.8), lineWidth: 1.5))
-                    .padding(.bottom, 4)
-            }
             Text(Format.clock(value))
-                .font(.system(size: engine.storyboard == nil ? 32 : 20, weight: .semibold))
+                .font(.system(size: 32, weight: .semibold))
             if engine.isLive {
                 let behind = engine.duration - value
                 Text(behind < 15 ? "En vivo" : "−\(Format.clock(behind)) del directo")
@@ -431,9 +427,16 @@ struct PlayerControls: View {
 
 /// Barra de progreso: fina en reposo, se ensancha al arrastrarla.
 struct Scrubber: View {
+    /// Miniatura que flota sobre el punto mientras se busca en un VOD.
+    struct Preview {
+        let image: UIImage?
+        let width: CGFloat
+    }
+
     let value: Double
     let total: Double
     var enabled = true
+    var preview: Preview?
     let onChanged: (Double) -> Void
     let onEnded: (Double) -> Void
 
@@ -457,6 +460,16 @@ struct Scrubber: View {
             }
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
+            .overlay(alignment: .bottomLeading) {
+                if let preview {
+                    // Centrada sobre el punto; puede asomar un poco por los lados de la barra
+                    let x = min(max(geo.size.width * fraction - preview.width / 2, -70), geo.size.width - preview.width + 70)
+                    bubble(preview)
+                        .offset(x: x, y: -26)
+                        .allowsHitTesting(false)
+                        .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottom)))
+                }
+            }
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { g in
@@ -481,6 +494,30 @@ struct Scrubber: View {
 
     private func position(_ x: CGFloat, width: CGFloat) -> Double {
         Double(min(max(x / max(width, 1), 0), 1)) * total
+    }
+
+    private func bubble(_ preview: Preview) -> some View {
+        VStack(spacing: 6) {
+            Color.black
+                .frame(width: preview.width, height: preview.width * 9 / 16)
+                .overlay {
+                    if let image = preview.image {
+                        Image(uiImage: image).resizable().scaledToFill()
+                    } else {
+                        ProgressView().tint(.white)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.white.opacity(0.9), lineWidth: 1.5))
+                .shadow(color: .black.opacity(0.5), radius: 10)
+            Text(Format.clock(value))
+                .font(.footnote.weight(.semibold))
+                .monospacedDigit()
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(.black.opacity(0.7), in: Capsule())
+        }
+        .frame(width: preview.width)
     }
 }
 

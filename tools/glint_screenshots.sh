@@ -41,3 +41,4 @@ shot vod 24
 shot clip 14
 shot resume 22
 shot quality 32
+shot scrub 24

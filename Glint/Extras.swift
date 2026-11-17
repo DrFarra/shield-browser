@@ -102,6 +102,8 @@ final class Storyboard {
     init(info: Info, base: URL) {
         self.info = info
         self.base = base
+        // Son pocas hojas (~400 KB cada una): se bajan todas para que la miniatura salga al instante
+        for sheet in info.images.indices { load(sheet) }
     }
 
     static func load(videoID: String) async -> Storyboard? {
@@ -130,13 +132,6 @@ final class Storyboard {
         let rect = CGRect(x: cell % info.cols * info.width, y: cell / info.cols * info.height,
                           width: info.width, height: info.height)
         return image.cropping(to: rect).map { UIImage(cgImage: $0) }
-    }
-
-    /// Se piden las hojas cercanas de antemano para que la miniatura salga al instante.
-    func preload(around time: Double) {
-        let perSheet = max(1, info.cols * info.rows)
-        let sheet = Int(time / max(info.interval, 1)) / perSheet
-        for s in [sheet, sheet + 1, sheet - 1] where s >= 0 && s < info.images.count { load(s) }
     }
 
     private func load(_ sheet: Int) {

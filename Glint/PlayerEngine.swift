@@ -28,6 +28,8 @@ final class PlayerEngine {
 
     /// Miniaturas para la barra de un VOD.
     private(set) var storyboard: Storyboard?
+    /// Solo para las capturas de CI: simula el dedo en la barra.
+    var demoScrub: Double?
 
     var isLive: Bool { mode != .vod }
     var atLiveEdge: Bool { mode == .live && duration - position < 15 }

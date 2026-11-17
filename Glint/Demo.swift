@@ -43,6 +43,14 @@ enum Demo {
                 }
                 playback.engine.togglePlay()
             }
+        case "scrub":
+            if let video = try? await Twitch.channel("ibai", withVideos: true)?.videos?.nodes.first {
+                library.removeWatched(video.id)
+                playback.play(.video(video.id))
+                try? await Task.sleep(for: .seconds(12))
+                playback.engine.togglePlay()
+                playback.engine.demoScrub = playback.engine.duration * 0.6
+            }
         case "history":
             router.home.append(.history)
         case "channel":
