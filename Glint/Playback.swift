@@ -14,6 +14,8 @@ final class Playback {
     var minimized = false
     private(set) var channel: Twitch.Channel?
     private(set) var video: Twitch.Video?
+    /// Otras emisiones del canal, debajo de un vídeo.
+    private(set) var moreVideos: [Twitch.Video] = []
     private(set) var problem: String?
     let engine = PlayerEngine()
     let chat = ChatClient()
@@ -65,6 +67,7 @@ final class Playback {
         chat.disconnect()
         channel = nil
         video = nil
+        moreVideos = []
     }
 
     private func start(_ media: Media) async {
@@ -97,6 +100,9 @@ final class Playback {
                 }
                 self.video = video
                 engine.startVOD(id: id, length: Double(video.lengthSeconds ?? 0))
+                if let login = video.owner?.login, let owner = try? await Twitch.channel(login, withVideos: true) {
+                    moreVideos = (owner.videos?.nodes ?? []).filter { $0.id != id }
+                }
             }
         } catch is CancellationError {
         } catch {

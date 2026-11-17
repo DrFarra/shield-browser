@@ -225,7 +225,15 @@ struct PlayerDetails: View {
             if case .live = playback.media {
                 ChatView(chat: playback.chat)
             } else {
-                Spacer()
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        if !playback.moreVideos.isEmpty {
+                            SectionHeader("Más de \(playback.video?.owner?.name ?? "este canal")")
+                        }
+                        ForEach(playback.moreVideos) { VideoRow(video: $0) }
+                    }
+                    .padding(16)
+                }
             }
         }
         .background(Color.black)

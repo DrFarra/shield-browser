@@ -26,6 +26,12 @@ enum Demo {
             if let login { router.home.append(.channel(login)) }
         case "player":
             if let login { playback.play(.live(login)) }
+        case "paused":
+            if let login {
+                playback.play(.live(login))
+                try? await Task.sleep(for: .seconds(8))
+                playback.engine.togglePlay()
+            }
         case "mini":
             if let login {
                 playback.play(.live(login))
