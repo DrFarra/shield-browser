@@ -23,6 +23,7 @@ jobs:
 
       - name: Generar proyecto Xcode
         run: |
+          mkdir -p Shield/Resources/Blocklists   # la carpeta de Shield que solo crea su propio build
           brew install xcodegen
           xcodegen generate
 
