@@ -43,3 +43,4 @@ shot clip 14
 shot resume 22
 shot quality 32
 shot scrub 24
+shot muted 24

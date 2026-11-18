@@ -66,6 +66,14 @@ enum Demo {
                     "@display-name=Vale;login=vale;bits=500;color=#FFD700 :vale!vale@vale.tmi.twitch.tv PRIVMSG #demo :Cheer500 vamos!",
                 ])
             }
+        case "muted":
+            // VOD con tramos silenciados: se empieza dentro de uno para ver la barra y el botón de saltar
+            if let video = try? await Twitch.video("2928776581") {
+                library.recordWatch(video, position: 5070)
+                playback.play(.video(video.id))
+                try? await Task.sleep(for: .seconds(12))
+                playback.engine.togglePlay()
+            }
         case "history":
             router.home.append(.history)
         case "channel":

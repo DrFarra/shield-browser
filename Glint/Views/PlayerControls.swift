@@ -53,6 +53,14 @@ struct PlayerControls: View {
                     jumpIndicator(width: geo.size.width)
                         .allowsHitTesting(false)
 
+                    if let range = engine.currentMuted, message == nil, scrub == nil {
+                        skipMutedButton(range)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                            .padding(.trailing, landscape ? max(safe.trailing, 16) : 12)
+                            .padding(.bottom, landscape ? max(safe.bottom, 6) + 52 : 46)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
+
                     if let message {
                         failure(message)
                     }
@@ -60,6 +68,7 @@ struct PlayerControls: View {
             }
         }
         .animation(.easeOut(duration: 0.12), value: visible)
+        .animation(.snappy, value: engine.currentMuted)
         .sensoryFeedback(.impact(weight: .light), trigger: jump?.seconds)
         .onChange(of: engine.isPlaying) { _, playing in
             if playing { scheduleHide() } else { show(keep: true) }
@@ -299,7 +308,8 @@ struct PlayerControls: View {
                 .frame(width: 62, alignment: .leading)
             Scrubber(value: shown, total: engine.duration, enabled: engine.canRewind && message == nil,
                      preview: scrub != nil && engine.storyboard != nil ? Scrubber.Preview(
-                        image: engine.storyboard?.frame(at: shown), width: landscape ? 220 : 160) : nil) { value in
+                        image: engine.storyboard?.frame(at: shown), width: landscape ? 220 : 160) : nil,
+                     marks: engine.muted) { value in
                 scrub = value
                 show(keep: true)
             } onEnded: { value in
@@ -335,6 +345,30 @@ struct PlayerControls: View {
     }
 
     // MARK: - Indicadores
+
+    /// Aparece solo mientras se está dentro de un tramo con el audio silenciado.
+    private func skipMutedButton(_ range: Range<Double>) -> some View {
+        Button {
+            engine.seek(to: range.upperBound + 0.5)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "speaker.slash.fill")
+                    .foregroundStyle(Scrubber.mutedColor)
+                Text("Audio silenciado")
+                    .foregroundStyle(.white.opacity(0.8))
+                Text("Saltar")
+                    .fontWeight(.semibold)
+                Image(systemName: "forward.end.fill")
+            }
+            .font(.footnote)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.tint(.black.opacity(0.35)).interactive(), in: Capsule())
+        .accessibilityLabel("Saltar el tramo con audio silenciado")
+    }
 
     private func scrubReadout(_ value: Double) -> some View {
         VStack(spacing: 2) {
@@ -405,6 +439,10 @@ struct Scrubber: View {
     let total: Double
     var enabled = true
     var preview: Preview?
+    /// Tramos marcados en la barra (audio silenciado).
+    var marks: [Range<Double>] = []
+
+    static let mutedColor = Color(red: 1, green: 0.72, blue: 0.25)
     let onChanged: (Double) -> Void
     let onEnded: (Double) -> Void
 
@@ -419,6 +457,16 @@ struct Scrubber: View {
                     .frame(height: dragging ? 6 : 3)
                 Capsule().fill(Color.glint)
                     .frame(width: geo.size.width * fraction, height: dragging ? 6 : 3)
+                if total > 0 {
+                    ForEach(marks, id: \.lowerBound) { mark in
+                        let start = geo.size.width * min(1, mark.lowerBound / total)
+                        let end = geo.size.width * min(1, mark.upperBound / total)
+                        Rectangle()
+                            .fill(Self.mutedColor)
+                            .frame(width: max(2, end - start), height: dragging ? 6 : 3)
+                            .offset(x: start)
+                    }
+                }
                 if enabled {
                     Circle().fill(.white)
                         .frame(width: thumb, height: thumb)

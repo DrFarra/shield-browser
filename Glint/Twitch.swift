@@ -218,6 +218,30 @@ enum Twitch {
         return r.video
     }
 
+    /// Tramos del VOD con el audio silenciado por derechos de autor, unidos si van seguidos.
+    static func mutedSegments(_ id: String) async throws -> [Range<Double>] {
+        struct N: Decodable { let duration: Int?; let offset: Int? }
+        struct C: Decodable { let nodes: [N]? }
+        struct M: Decodable { let mutedSegmentConnection: C? }
+        struct V: Decodable { let muteInfo: M? }
+        struct R: Decodable { let video: V? }
+        let r: R = try await query("""
+            query($id: ID!) { video(id: $id) { muteInfo { mutedSegmentConnection { nodes { duration offset } } } } }
+            """, ["id": id])
+        let nodes = (r.video?.muteInfo?.mutedSegmentConnection?.nodes ?? []).sorted { ($0.offset ?? 0) < ($1.offset ?? 0) }
+        var ranges: [Range<Double>] = []
+        for node in nodes {
+            guard let offset = node.offset, let duration = node.duration, duration > 0 else { continue }
+            let range = Double(offset)..<Double(offset + duration)
+            if let last = ranges.last, range.lowerBound <= last.upperBound + 1 {
+                ranges[ranges.count - 1] = last.lowerBound..<max(last.upperBound, range.upperBound)
+            } else {
+                ranges.append(range)
+            }
+        }
+        return ranges
+    }
+
     // MARK: - Clips
 
     /// Clips más vistos del último mes de un canal.

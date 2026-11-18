@@ -28,6 +28,14 @@ final class PlayerEngine {
 
     /// Miniaturas para la barra de un VOD.
     private(set) var storyboard: Storyboard?
+    /// Tramos del VOD con el audio silenciado.
+    private(set) var muted: [Range<Double>] = []
+
+    /// Tramo silenciado en el que está la reproducción ahora mismo.
+    var currentMuted: Range<Double>? {
+        guard mode == .vod, !muted.isEmpty else { return nil }
+        return muted.first { $0.contains(position) && $0.upperBound - position > 2 }
+    }
     /// Solo para las capturas de CI: simula el dedo en la barra.
     var demoScrub: Double?
 
@@ -76,8 +84,13 @@ final class PlayerEngine {
         videoID = id
         clipSlug = nil
         Task { [weak self] in
+            async let mutedRanges = try? Twitch.mutedSegments(id)
             let board = await Storyboard.load(videoID: id)
-            if self?.videoID == id, self?.clipSlug == nil { self?.storyboard = board }
+            let ranges = await mutedRanges ?? []
+            if self?.videoID == id, self?.clipSlug == nil {
+                self?.storyboard = board
+                self?.muted = ranges
+            }
         }
         startedAt = nil
         archiveID = nil
@@ -112,6 +125,7 @@ final class PlayerEngine {
     func stop() {
         loadTask?.cancel()
         storyboard = nil
+        muted = []
         player.replaceCurrentItem(with: nil)
         itemObserver = nil
         qualities = []
