@@ -51,6 +51,21 @@ enum Demo {
                 playback.engine.togglePlay()
                 playback.engine.demoScrub = playback.engine.duration * 0.6
             }
+        case "chatstyles":
+            if let login {
+                playback.play(.live(login))
+                try? await Task.sleep(for: .seconds(8))
+                playback.chat.injectForDemo([
+                    "@display-name=Lumen_88;login=lumen_88;color=#9ACD32;msg-id=resub;system-msg=Lumen_88\\ssubscribed\\sat\\sTier\\s1.\\sThey've\\ssubscribed\\sfor\\s14\\smonths! :tmi.twitch.tv USERNOTICE #demo :14 meses ya, qué rápido",
+                    "@display-name=NubeRoja;login=nuberoja;msg-id=submysterygift;system-msg=NubeRoja\\sis\\sgifting\\s5\\sTier\\s1\\sSubs\\sto\\sthe\\scommunity! :tmi.twitch.tv USERNOTICE #demo",
+                    "@display-name=Tomi;login=tomi;color=#FF7F50;reply-parent-display-name=Lumen_88;reply-parent-msg-body=14\\smeses\\sya,\\squé\\srápido :tomi!tomi@tomi.tmi.twitch.tv PRIVMSG #demo :@Lumen_88 felicidades!",
+                    "@display-name=PixelNorte;login=pixelnorte;msg-id=raid;system-msg=230\\sraiders\\sfrom\\sPixelNorte\\shave\\sjoined! :tmi.twitch.tv USERNOTICE #demo",
+                    "@display-name=Sara;login=sara;color=#DA70D6 :sara!sara@sara.tmi.twitch.tv PRIVMSG #demo :el clip está acá https://clips.twitch.tv/ejemplo",
+                    "@display-name=ModeradorX;login=moderadorx;color=#1E90FF;msg-id=announcement;system-msg= :tmi.twitch.tv USERNOTICE #demo :Sorteo a las 22:00, atentos",
+                    "@display-name=Marco;login=marco;color=#20B2AA;msg-id=highlighted-message :marco!marco@marco.tmi.twitch.tv PRIVMSG #demo :mensaje destacado con puntos del canal",
+                    "@display-name=Vale;login=vale;bits=500;color=#FFD700 :vale!vale@vale.tmi.twitch.tv PRIVMSG #demo :Cheer500 vamos!",
+                ])
+            }
         case "history":
             router.home.append(.history)
         case "channel":

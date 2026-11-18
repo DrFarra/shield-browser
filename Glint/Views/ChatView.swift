@@ -73,11 +73,74 @@ struct ChatView: View {
 
 struct ChatRow: View {
     let message: ChatMessage
+    @Environment(\.openURL) private var openURL
+
+    private static let linkColor = Color(red: 0.45, green: 0.72, blue: 1)
 
     var body: some View {
-        rendered
-            .font(.subheadline)
+        content
             .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            // Tocar un mensaje con enlace lo abre; mantener pulsado da a elegir
+            .onTapGesture {
+                if let url = message.links.first { openURL(url) }
+            }
+            .contextMenu {
+                ForEach(message.links, id: \.self) { url in
+                    Button("Abrir \(url.host() ?? "enlace")", systemImage: "safari") { openURL(url) }
+                    Button("Copiar enlace", systemImage: "doc.on.doc") { UIPasteboard.general.url = url }
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch message.kind {
+        case .event(let event):
+            // Tarjeta con icono y barra de color: no se confunde con un mensaje normal
+            VStack(alignment: .leading, spacing: 5) {
+                Label {
+                    Text(verbatim: event.text).font(.footnote.weight(.semibold))
+                } icon: {
+                    Image(systemName: event.style.icon).foregroundStyle(event.style.tint)
+                }
+                if !message.parts.isEmpty {
+                    rendered.font(.subheadline)
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.leading, 14)
+            .padding(.trailing, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(event.style.tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(alignment: .leading) {
+                Capsule().fill(event.style.tint).frame(width: 3).padding(.vertical, 7).padding(.leading, 4)
+            }
+            .padding(.vertical, 2)
+        case .highlighted:
+            withReply(rendered.font(.subheadline))
+                .padding(.vertical, 7)
+                .padding(.horizontal, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.glint.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        case .normal:
+            withReply(rendered.font(.subheadline))
+        }
+    }
+
+    private func withReply(_ text: some View) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let reply = message.reply {
+                Label {
+                    Text(verbatim: reply).lineLimit(1)
+                } icon: {
+                    Image(systemName: "arrowshape.turn.up.left.fill")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            text
+        }
     }
 
     private var rendered: Text {
@@ -96,8 +159,36 @@ struct ChatRow: View {
                 } else {
                     text = Text("\(text)\(Text(verbatim: name))")
                 }
+            case .mention(let name):
+                text = Text("\(text)\(Text(verbatim: name).bold().foregroundStyle(Color.glint))")
+            case .link(let display, _):
+                text = Text("\(text)\(Text(verbatim: display).underline().foregroundStyle(Self.linkColor))")
             }
         }
         return text
+    }
+}
+
+extension ChatMessage.Event.Style {
+    var icon: String {
+        switch self {
+        case .sub: "star.fill"
+        case .gift: "gift.fill"
+        case .raid: "person.3.fill"
+        case .announcement: "megaphone.fill"
+        case .bits: "diamond.fill"
+        case .other: "sparkles"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .sub: .glint
+        case .gift: Color(red: 1, green: 0.47, blue: 0.7)
+        case .raid: Color(red: 1, green: 0.62, blue: 0.25)
+        case .announcement: Color(red: 0.45, green: 0.68, blue: 1)
+        case .bits: Color(red: 0.72, green: 0.52, blue: 1)
+        case .other: Color(red: 1, green: 0.85, blue: 0.35)
+        }
     }
 }

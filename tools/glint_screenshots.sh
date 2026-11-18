@@ -35,6 +35,7 @@ shot search 8
 shot history 8
 shot channel 10
 shot player 18
+shot chatstyles 16
 shot paused 16
 shot mini 20
 shot vod 24

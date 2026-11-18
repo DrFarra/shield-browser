@@ -7,13 +7,39 @@ struct ChatMessage: Identifiable {
     enum Part {
         case text(String)
         case emote(url: String, name: String)
+        case mention(String)
+        case link(String, URL)
+    }
+
+    /// Avisos de Twitch: suscripciones, regalos, raids, anuncios y bits.
+    struct Event {
+        enum Style { case sub, gift, raid, announcement, bits, other }
+        let style: Style
+        let text: String
+    }
+
+    enum Kind {
+        case normal
+        /// "Destacar mi mensaje" con puntos del canal.
+        case highlighted
+        case event(Event)
     }
 
     let id = UUID()
     let name: String
     let color: Color
-    let parts: [Part]
+    var parts: [Part]
     let isAction: Bool
+    var kind: Kind = .normal
+    /// "Nombre: mensaje" al que responde.
+    var reply: String?
+
+    var links: [URL] {
+        parts.compactMap { part in
+            if case .link(_, let url) = part { return url }
+            return nil
+        }
+    }
 
     var emoteURLs: [String] {
         parts.compactMap { part in
@@ -22,6 +48,8 @@ struct ChatMessage: Identifiable {
         }
     }
 }
+
+private let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 
 /// Chat de solo lectura: IRC de Twitch como usuario anónimo (justinfan), que
 /// no necesita cuenta. En un VOD reproduce el chat original al ritmo del vídeo.
@@ -190,6 +218,13 @@ final class ChatClient {
         ws.cancel()
     }
 
+    /// Solo para las capturas de CI: mete mensajes IRC de ejemplo en el chat.
+    func injectForDemo(_ lines: [String]) {
+        for line in lines {
+            if let message = Self.parse(line) { receive(message) }
+        }
+    }
+
     // MARK: - Ritmo del chat
 
     /// Mensaje del directo recién llegado, todavía sin emotes de 7TV/BTTV/FFZ.
@@ -262,9 +297,19 @@ final class ChatClient {
             }
             return .text(fragment.text ?? "")
         }
-        return expand(ChatMessage(name: comment.commenter?.name ?? "?",
+        var message = ChatMessage(name: comment.commenter?.name ?? "?",
                                   color: Self.color(comment.message?.userColor.map { Substring($0) }, name: login),
-                                  parts: parts, isAction: false))
+                                  parts: Self.annotate(parts), isAction: false)
+        // En los VOD Twitch guarda las suscripciones como texto normal: se reconocen por la frase
+        let plain = (comment.message?.fragments ?? []).compactMap(\.text).joined()
+        if plain.contains(" subscribed at Tier ") || plain.contains(" subscribed with Prime") {
+            message.kind = .event(.init(style: .sub, text: plain))
+            message.parts = []
+        } else if plain.contains(" is gifting ") || plain.contains(" gifted a ") {
+            message.kind = .event(.init(style: .gift, text: plain))
+            message.parts = []
+        }
+        return expand(message)
     }
 
     /// Cambia las palabras que son emotes de 7TV/BTTV/FFZ por su imagen.
@@ -292,7 +337,10 @@ final class ChatClient {
             }
             if !run.isEmpty { parts.append(.text(run)) }
         }
-        return changed ? ChatMessage(name: message.name, color: message.color, parts: parts, isAction: message.isAction) : message
+        guard changed else { return message }
+        var copy = message
+        copy.parts = parts
+        return copy
     }
 
     nonisolated static func twitchEmoteURL(_ id: String) -> String {
@@ -311,11 +359,21 @@ final class ChatClient {
             }
             rest = rest[rest.index(after: space)...]
         }
-        guard let command = rest.range(of: " PRIVMSG #") else { return nil }
-        let afterChannel = rest[command.upperBound...]
-        guard let colon = afterChannel.range(of: " :") else { return nil }
-        var text = String(afterChannel[colon.upperBound...])
-        let login = String(rest.dropFirst().prefix { $0 != "!" })
+        let isNotice: Bool
+        let afterChannel: Substring
+        if let command = rest.range(of: " PRIVMSG #") {
+            afterChannel = rest[command.upperBound...]
+            isNotice = false
+        } else if let command = rest.range(of: " USERNOTICE #") {
+            afterChannel = rest[command.upperBound...]
+            isNotice = true
+        } else {
+            return nil
+        }
+        // En un aviso (suscripción, raid…) el mensaje del usuario es opcional
+        var text = afterChannel.range(of: " :").map { String(afterChannel[$0.upperBound...]) } ?? ""
+        if !isNotice, text.isEmpty { return nil }
+        let login = isNotice ? (tags["login"].map(String.init) ?? "") : String(rest.dropFirst().prefix { $0 != "!" })
         let display = tags["display-name"].map(String.init) ?? ""
         let name = display.isEmpty ? login : display
 
@@ -325,8 +383,94 @@ final class ChatClient {
             isAction = true
         }
 
-        return ChatMessage(name: name, color: color(tags["color"], name: login),
-                           parts: parts(text, emotes: tags["emotes"] ?? ""), isAction: isAction)
+        var message = ChatMessage(name: name, color: color(tags["color"], name: login),
+                                  parts: text.isEmpty ? [] : annotate(parts(text, emotes: tags["emotes"] ?? "")),
+                                  isAction: isAction)
+        let msgID = tags["msg-id"].map(String.init) ?? ""
+        if isNotice {
+            // Una suscripción múltiple llega también regalo a regalo: basta con el aviso general
+            if msgID == "subgift", tags["msg-param-community-gift-id"] != nil { return nil }
+            var system = tags["system-msg"].map(unescape) ?? ""
+            if msgID == "announcement" { system = "Anuncio" }
+            guard !system.isEmpty else { return nil }
+            message.kind = .event(.init(style: style(forNotice: msgID), text: system))
+        } else if msgID == "highlighted-message" {
+            message.kind = .highlighted
+        } else if let bits = tags["bits"], let amount = Int(bits) {
+            message.kind = .event(.init(style: .bits, text: "\(amount) bits"))
+        }
+        if let parent = tags["reply-parent-display-name"], let body = tags["reply-parent-msg-body"] {
+            message.reply = "\(unescape(parent)): \(unescape(body))"
+        }
+        return message
+    }
+
+    nonisolated static func style(forNotice id: String) -> ChatMessage.Event.Style {
+        switch id {
+        case "sub", "resub", "primepaidupgrade", "giftpaidupgrade", "anongiftpaidupgrade": .sub
+        case "subgift", "submysterygift", "anonsubgift", "anonsubmysterygift", "communitypayforward", "standardpayforward": .gift
+        case "raid": .raid
+        case "announcement": .announcement
+        default: .other
+        }
+    }
+
+    /// Valores de etiquetas IRC: "\s" es un espacio, "\:" un punto y coma…
+    nonisolated static func unescape(_ value: Substring) -> String {
+        var out = ""
+        var chars = value.makeIterator()
+        while let c = chars.next() {
+            guard c == "\\" else {
+                out.append(c)
+                continue
+            }
+            switch chars.next() {
+            case "s": out.append(" ")
+            case ":": out.append(";")
+            case "r", "n": out.append(" ")
+            case let other?: out.append(other)
+            case nil: break
+            }
+        }
+        return out
+    }
+
+    /// Separa en el texto las menciones (@nombre) y los enlaces.
+    nonisolated static func annotate(_ parts: [ChatMessage.Part]) -> [ChatMessage.Part] {
+        var out: [ChatMessage.Part] = []
+        for part in parts {
+            guard case .text(let text) = part else {
+                out.append(part)
+                continue
+            }
+            var run = ""
+            for (i, word) in text.split(separator: " ", omittingEmptySubsequences: false).enumerated() {
+                if i > 0 { run += " " }
+                let token = String(word)
+                if token.count > 1, token.hasPrefix("@") {
+                    if !run.isEmpty { out.append(.text(run)) }
+                    run = ""
+                    out.append(.mention(token))
+                } else if let url = linkURL(token) {
+                    if !run.isEmpty { out.append(.text(run)) }
+                    run = ""
+                    out.append(.link(token, url))
+                } else {
+                    run += token
+                }
+            }
+            if !run.isEmpty { out.append(.text(run)) }
+        }
+        return out
+    }
+
+    nonisolated static func linkURL(_ token: String) -> URL? {
+        guard token.count > 4, token.contains("."), let detector = linkDetector else { return nil }
+        let range = NSRange(token.startIndex..., in: token)
+        // Tiene que ser la palabra entera (sin contar un signo al final), no "hola.que"
+        guard let match = detector.firstMatch(in: token, range: range),
+              match.range.location == 0, match.range.length >= range.length - 1 else { return nil }
+        return match.url
     }
 
     /// "25:0-4,12-16/1902:6-10" → trozos de texto y emotes (posiciones en escalares Unicode).
