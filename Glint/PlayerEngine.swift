@@ -24,6 +24,8 @@ final class PlayerEngine {
     /// Nombre de la calidad elegida; nil = automática.
     private(set) var quality: String? = UserDefaults.standard.string(forKey: "quality")
     private(set) var rate: Float = 1
+    /// Se está cambiando de conexión para saltarse un anuncio.
+    private(set) var skippingAd = false
     var fill = false { didSet { layer?.videoGravity = fill ? .resizeAspectFill : .resizeAspect } }
 
     /// Miniaturas para la barra de un VOD.
@@ -50,6 +52,11 @@ final class PlayerEngine {
     /// Mientras se cambia de vídeo y se salta a su punto, la posición no se toca
     /// (si no, por un momento valdría 0 y se guardaría ese 0 en el historial).
     @ObservationIgnored private var settling = false
+    /// Tipo de reproductor con el que se pide el directo (ver Twitch.adFreePlayerTypes).
+    @ObservationIgnored private var playerAttempt = 0
+    @ObservationIgnored private var adTask: Task<Void, Never>?
+    /// Reconexiones seguidas por el mismo anuncio; vuelve a 0 cuando la lista sale limpia.
+    @ObservationIgnored private var adReconnects = 0
     @ObservationIgnored private var startedAt: Date?
     @ObservationIgnored private var archiveID: String?
     @ObservationIgnored private var master: URL?
@@ -124,6 +131,10 @@ final class PlayerEngine {
 
     func stop() {
         loadTask?.cancel()
+        adTask?.cancel()
+        skippingAd = false
+        playerAttempt = 0
+        adReconnects = 0
         storyboard = nil
         muted = []
         player.replaceCurrentItem(with: nil)
@@ -144,7 +155,7 @@ final class PlayerEngine {
             do {
                 let playlist: Twitch.Playlist
                 switch newMode {
-                case .live: playlist = try await Twitch.livePlaylist(login)
+                case .live: playlist = try await adFreeLivePlaylist()
                 case .archive: playlist = try await Twitch.videoPlaylist(archiveID ?? "")
                 case .vod:
                     if let clipSlug {
@@ -158,11 +169,52 @@ final class PlayerEngine {
                 qualities = playlist.qualities
                 mode = newMode
                 if let offset { position = offset }
+                skippingAd = false
+                if newMode == .live { watchForAds() } else { adTask?.cancel() }
                 await replaceItem(at: offset)
             } catch is CancellationError {
             } catch {
                 self.error = error.localizedDescription
                 isBuffering = false
+            }
+        }
+    }
+
+    // MARK: - Anuncios
+
+    /// Lista del directo sin anuncio: si la que da Twitch empieza con uno, se pide con
+    /// otro tipo de reproductor antes de empezar a reproducir.
+    private func adFreeLivePlaylist() async throws -> Twitch.Playlist {
+        var playlist = try await Twitch.livePlaylist(login, attempt: playerAttempt)
+        for _ in 1..<Twitch.adFreePlayerTypes.count {
+            guard let probe = playlist.qualities.first?.url,
+                  let text = try? await Twitch.text(probe), Twitch.hasAds(text) else { break }
+            playerAttempt += 1
+            playlist = try await Twitch.livePlaylist(login, attempt: playerAttempt)
+        }
+        return playlist
+    }
+
+    /// Mientras se ve un directo, mira cada pocos segundos si ha empezado un anuncio a mitad
+    /// de emisión; si es así, vuelve a conectar con otro tipo de reproductor (un parón de un
+    /// segundo en vez del anuncio entero). Si todos traen el anuncio, se deja estar.
+    private func watchForAds() {
+        adTask?.cancel()
+        adTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard let self, mode == .live,
+                      let url = qualities.first(where: { $0.name == quality })?.url ?? qualities.first?.url,
+                      let text = try? await Twitch.text(url), !Task.isCancelled else { continue }
+                if !Twitch.hasAds(text) {
+                    adReconnects = 0
+                } else if adReconnects < Twitch.adFreePlayerTypes.count - 1 {
+                    adReconnects += 1
+                    playerAttempt += 1
+                    skippingAd = true
+                    load(.live, at: nil)
+                    return
+                }
             }
         }
     }

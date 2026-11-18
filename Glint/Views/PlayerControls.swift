@@ -53,6 +53,19 @@ struct PlayerControls: View {
                     jumpIndicator(width: geo.size.width)
                         .allowsHitTesting(false)
 
+                    if engine.skippingAd {
+                        Label("Saltando anuncio…", systemImage: "forward.fill")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(.black.opacity(0.6), in: Capsule())
+                            .frame(maxHeight: .infinity, alignment: .top)
+                            .padding(.top, landscape ? max(safe.top, 12) + 44 : 48)
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                    }
+
                     if let range = engine.currentMuted, message == nil, scrub == nil {
                         skipMutedButton(range)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
@@ -69,6 +82,7 @@ struct PlayerControls: View {
         }
         .animation(.easeOut(duration: 0.12), value: visible)
         .animation(.snappy, value: engine.currentMuted)
+        .animation(.easeOut(duration: 0.2), value: engine.skippingAd)
         .sensoryFeedback(.impact(weight: .light), trigger: jump?.seconds)
         .onChange(of: engine.isPlaying) { _, playing in
             if playing { scheduleHide() } else { show(keep: true) }

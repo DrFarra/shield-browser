@@ -324,13 +324,19 @@ enum Twitch {
         let qualities: [Quality]
     }
 
-    static func livePlaylist(_ login: String) async throws -> Playlist {
+    /// Tipos de reproductor con los que se pide el directo, en orden. Twitch mete los
+    /// anuncios en el propio vídeo y depende del tipo: "site" (la web) suele empezar
+    /// con anuncio y "embed", "popout" o "autoplay" no. Si uno trae anuncio se prueba el siguiente.
+    static let adFreePlayerTypes: [(type: String, platform: String)] = [("embed", "web"), ("popout", "web"), ("autoplay", "android")]
+
+    static func livePlaylist(_ login: String, attempt: Int = 0) async throws -> Playlist {
         struct T: Decodable { let value: String; let signature: String }
         struct R: Decodable { let streamPlaybackAccessToken: T? }
+        let player = adFreePlayerTypes[attempt % adFreePlayerTypes.count]
         let r: R = try await query("""
-            query($login: String!) { streamPlaybackAccessToken(channelName: $login, \
-            params: {platform: "web", playerBackend: "mediaplayer", playerType: "site"}) { value signature } }
-            """, ["login": login])
+            query($login: String!, $type: String!, $platform: String!) { streamPlaybackAccessToken(channelName: $login, \
+            params: {platform: $platform, playerBackend: "mediaplayer", playerType: $type}) { value signature } }
+            """, ["login": login, "type": player.type, "platform": player.platform])
         guard let t = r.streamPlaybackAccessToken else { throw Failure(message: "Twitch no dio acceso a este directo") }
         let url = "https://usher.ttvnw.net/api/channel/hls/\(login.lowercased()).m3u8?\(commonParams)&fast_bread=true&sig=\(t.signature)&token=\(escape(t.value))"
         return try await playlist(url)
@@ -367,6 +373,19 @@ enum Twitch {
         case let code: throw Failure(message: "Twitch respondió con un error (\(code))")
         }
         return Playlist(url: url, qualities: qualities(in: String(decoding: data, as: UTF8.self)))
+    }
+
+    /// ¿La lista de un directo está emitiendo un anuncio ahora? Twitch marca los tramos
+    /// de anuncio con un DATERANGE "stitched-ad" y sus segmentos no se titulan "live".
+    static func hasAds(_ mediaPlaylist: String) -> Bool {
+        if mediaPlaylist.contains("stitched-ad") { return true }
+        return mediaPlaylist.split(whereSeparator: \.isNewline).contains { line in
+            line.hasPrefix("#EXTINF") && !line.hasSuffix(",live")
+        }
+    }
+
+    static func text(_ url: URL) async throws -> String {
+        String(decoding: try await URLSession.shared.data(from: url).0, as: UTF8.self)
     }
 
     /// Calidades de una lista maestra HLS, en el orden de Twitch (de mayor a menor).
