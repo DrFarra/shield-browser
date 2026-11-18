@@ -461,9 +461,10 @@ struct Scrubber: View {
                     ForEach(marks, id: \.lowerBound) { mark in
                         let start = geo.size.width * min(1, mark.lowerBound / total)
                         let end = geo.size.width * min(1, mark.upperBound / total)
-                        Rectangle()
+                        // Algo más gruesos que la barra y con un ancho mínimo, para verse aunque sean cortos
+                        Capsule()
                             .fill(Self.mutedColor)
-                            .frame(width: max(2, end - start), height: dragging ? 6 : 3)
+                            .frame(width: max(5, end - start), height: dragging ? 8 : 5)
                             .offset(x: start)
                     }
                 }

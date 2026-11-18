@@ -44,3 +44,4 @@ shot resume 22
 shot quality 32
 shot scrub 24
 shot muted 24
+shot mutedbar 24

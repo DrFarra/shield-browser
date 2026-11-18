@@ -69,13 +69,15 @@ enum Demo {
                 try? await Task.sleep(for: .seconds(2))
                 playback.chat.paused = true
             }
-        case "muted":
+        case "muted", "mutedbar":
             // VOD con tramos silenciados: se empieza dentro de uno para ver la barra y el botón de saltar
             if let video = try? await Twitch.video("2928776581") {
                 library.recordWatch(video, position: 5070)
                 playback.play(.video(video.id))
                 try? await Task.sleep(for: .seconds(12))
                 playback.engine.togglePlay()
+                // Con el dedo en otro punto, el tramo ámbar de la barra queda a la vista
+                if screen == "mutedbar" { playback.engine.demoScrub = playback.engine.duration * 0.6 }
             }
         case "history":
             router.home.append(.history)
