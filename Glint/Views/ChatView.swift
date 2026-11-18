@@ -64,6 +64,10 @@ struct ChatView: View {
             }
         }
         .animation(.snappy, value: chat.pendingCount > 0)
+        // Al girar el iPhone se cambia de chat (debajo del vídeo ↔ panel lateral):
+        // el que aparece arranca siempre siguiendo el último mensaje
+        .onAppear { chat.paused = false }
+        .onDisappear { chat.paused = false }
     }
 }
 
