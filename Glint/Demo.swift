@@ -65,6 +65,9 @@ enum Demo {
                     "@display-name=Marco;login=marco;color=#20B2AA;msg-id=highlighted-message :marco!marco@marco.tmi.twitch.tv PRIVMSG #demo :mensaje destacado con puntos del canal",
                     "@display-name=Vale;login=vale;bits=500;color=#FFD700 :vale!vale@vale.tmi.twitch.tv PRIVMSG #demo :Cheer500 vamos!",
                 ])
+                // Se pausa el chat para que los mensajes reales no los saquen de pantalla antes de la captura
+                try? await Task.sleep(for: .seconds(2))
+                playback.chat.paused = true
             }
         case "muted":
             // VOD con tramos silenciados: se empieza dentro de uno para ver la barra y el botón de saltar

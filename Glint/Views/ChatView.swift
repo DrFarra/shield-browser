@@ -78,7 +78,17 @@ struct ChatRow: View {
     private static let linkColor = Color(red: 0.45, green: 0.72, blue: 1)
 
     var body: some View {
-        content
+        Group {
+            // Los mensajes con emotes animados se redibujan ~20 veces por segundo con el
+            // fotograma que toca; todos los fotogramas miden lo mismo, así que nada se mueve
+            if message.emoteURLs.contains(where: { EmoteImages.shared.isAnimated($0) }) {
+                TimelineView(.animation(minimumInterval: 1 / 20)) { context in
+                    content(at: context.date)
+                }
+            } else {
+                content(at: nil)
+            }
+        }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             // Tocar un mensaje con enlace lo abre; mantener pulsado da a elegir
@@ -94,7 +104,8 @@ struct ChatRow: View {
     }
 
     @ViewBuilder
-    private var content: some View {
+    private func content(at time: Date?) -> some View {
+        let line = rendered(at: time)
         switch message.kind {
         case .event(let event):
             // Tarjeta con icono y barra de color: no se confunde con un mensaje normal
@@ -105,7 +116,7 @@ struct ChatRow: View {
                     Image(systemName: event.style.icon).foregroundStyle(event.style.tint)
                 }
                 if !message.parts.isEmpty {
-                    rendered.font(.subheadline)
+                    line.font(.subheadline)
                 }
             }
             .padding(.vertical, 8)
@@ -118,13 +129,13 @@ struct ChatRow: View {
             }
             .padding(.vertical, 2)
         case .highlighted:
-            withReply(rendered.font(.subheadline))
+            withReply(line.font(.subheadline))
                 .padding(.vertical, 7)
                 .padding(.horizontal, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.glint.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         case .normal:
-            withReply(rendered.font(.subheadline))
+            withReply(line.font(.subheadline))
         }
     }
 
@@ -143,7 +154,7 @@ struct ChatRow: View {
         }
     }
 
-    private var rendered: Text {
+    private func rendered(at time: Date?) -> Text {
         let emotes = EmoteImages.shared
         var text = Text(verbatim: message.name).bold().foregroundStyle(message.color)
         text = Text("\(text)\(Text(verbatim: message.isAction ? " " : ": ").foregroundStyle(.secondary))")
@@ -154,7 +165,7 @@ struct ChatRow: View {
                 if message.isAction { piece = piece.italic().foregroundStyle(message.color) }
                 text = Text("\(text)\(piece)")
             case .emote(let url, let name):
-                if let image = emotes.image(url) {
+                if let image = emotes.image(url, at: time) {
                     text = Text("\(text)\(Text(Image(uiImage: image)).baselineOffset(-5))")
                 } else {
                     text = Text("\(text)\(Text(verbatim: name))")

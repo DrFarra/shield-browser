@@ -344,7 +344,7 @@ final class ChatClient {
     }
 
     nonisolated static func twitchEmoteURL(_ id: String) -> String {
-        "https://static-cdn.jtvnw.net/emoticons/v2/\(id)/static/dark/2.0"
+        "https://static-cdn.jtvnw.net/emoticons/v2/\(id)/default/dark/2.0"
     }
 
     // MARK: - IRC
@@ -519,20 +519,39 @@ final class ChatClient {
 }
 
 /// Imágenes de emotes (Twitch, 7TV, BTTV, FFZ), descargadas una vez y compartidas.
-/// Las animadas se muestran con su primer fotograma. No avisa a las vistas al
-/// terminar una descarga: el chat solo muestra mensajes con sus emotes ya listos,
+/// Las animadas guardan todos sus fotogramas con su duración. No avisa a las vistas
+/// al terminar una descarga: el chat solo muestra mensajes con sus emotes ya listos,
 /// así una imagen nueva no redibuja (ni mueve) los mensajes que ya están en pantalla.
 @MainActor
 final class EmoteImages {
+    struct Frames {
+        let images: [UIImage]
+        /// Momento en que acaba cada fotograma, acumulado.
+        let ends: [Double]
+        var isAnimated: Bool { images.count > 1 }
+
+        func frame(at time: TimeInterval) -> UIImage {
+            guard isAnimated, let total = ends.last, total > 0 else { return images[0] }
+            let t = time.truncatingRemainder(dividingBy: total)
+            return images[ends.firstIndex { t < $0 } ?? images.count - 1]
+        }
+    }
+
     static let shared = EmoteImages()
-    private var images: [String: UIImage] = [:]
+    private var cache: [String: Frames] = [:]
     private var failed: Set<String> = []
     private var loading: Set<String> = []
 
-    func image(_ url: String) -> UIImage? { images[url] }
+    /// Fotograma que toca en `time` (el primero si no se pasa hora).
+    func image(_ url: String, at time: Date? = nil) -> UIImage? {
+        guard let frames = cache[url] else { return nil }
+        return time.map { frames.frame(at: $0.timeIntervalSinceReferenceDate) } ?? frames.images[0]
+    }
+
+    func isAnimated(_ url: String) -> Bool { cache[url]?.isAnimated ?? false }
 
     /// Descargada, o falló (entonces se muestra su nombre).
-    func isReady(_ url: String) -> Bool { images[url] != nil || failed.contains(url) }
+    func isReady(_ url: String) -> Bool { cache[url] != nil || failed.contains(url) }
 
     func prefetch(_ urls: [String]) {
         for url in urls where !isReady(url) && loading.insert(url).inserted {
@@ -542,14 +561,44 @@ final class EmoteImages {
 
     private func load(_ link: String) async {
         defer { loading.remove(link) }
-        guard let url = URL(string: link),
-              let data = try? await URLSession.shared.data(from: url).0,
-              let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+        guard let url = URL(string: link), let data = try? await URLSession.shared.data(from: url).0 else {
             failed.insert(link)
             return
         }
-        // Todas a la altura de una línea de texto, sea cual sea su tamaño original
-        images[link] = UIImage(cgImage: image, scale: max(1, CGFloat(image.height) / 22), orientation: .up)
+        // Decodificar fuera del hilo principal: un emote animado tiene decenas de fotogramas
+        let frames = await Task.detached(priority: .userInitiated) { Self.decode(data) }.value
+        if let frames { cache[link] = frames } else { failed.insert(link) }
+    }
+
+    nonisolated private static func decode(_ data: Data) -> Frames? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let count = CGImageSourceGetCount(source)
+        guard count > 0 else { return nil }
+        // Como mucho ~100 fotogramas: los emotes largos se muestrean sin cambiar su velocidad
+        let step = max(1, count / 100)
+        var images: [UIImage] = []
+        var ends: [Double] = []
+        var elapsed = 0.0
+        for index in stride(from: 0, to: count, by: step) {
+            guard let image = CGImageSourceCreateImageAtIndex(source, index, nil) else { continue }
+            // Todas a la altura de una línea de texto, sea cual sea su tamaño original
+            images.append(UIImage(cgImage: image, scale: max(1, CGFloat(image.height) / 22), orientation: .up))
+            elapsed += delay(source, index) * Double(step)
+            ends.append(elapsed)
+        }
+        return images.isEmpty ? nil : Frames(images: images, ends: ends)
+    }
+
+    /// Duración de un fotograma de GIF o WebP animado (0,1 s si no la indica o es absurda).
+    nonisolated private static func delay(_ source: CGImageSource, _ index: Int) -> Double {
+        let props = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+        var value: Double?
+        if let gif = props?[kCGImagePropertyGIFDictionary] as? [CFString: Any] {
+            value = (gif[kCGImagePropertyGIFUnclampedDelayTime] ?? gif[kCGImagePropertyGIFDelayTime]) as? Double
+        } else if let webp = props?[kCGImagePropertyWebPDictionary] as? [CFString: Any] {
+            value = (webp[kCGImagePropertyWebPUnclampedDelayTime] ?? webp[kCGImagePropertyWebPDelayTime]) as? Double
+        }
+        guard let value, value >= 0.02 else { return 0.1 }
+        return value
     }
 }
