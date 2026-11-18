@@ -1,3 +1,4 @@
+import ImageIO
 import Observation
 import SwiftUI
 import UIKit
@@ -46,14 +47,26 @@ final class ChatClient {
     /// Emotes de 7TV, BTTV y FFZ del canal: nombre → URL.
     @ObservationIgnored private var extraEmotes: [String: String] = [:]
     @ObservationIgnored private var emoteTask: Task<Void, Never>?
+    /// Lista de emotes de 7TV/BTTV/FFZ ya descargada. Hasta entonces los mensajes del
+    /// directo esperan en `waiting`: si no, se quedarían con el emote como texto.
+    @ObservationIgnored private var emotesLoaded = false
+    @ObservationIgnored private var waiting: [(message: ChatMessage, arrived: Date)] = []
 
     func loadEmotes(channelID: String?) {
         emoteTask?.cancel()
         emoteTask = Task { [weak self] in
             let emotes = await ThirdPartyEmotes.load(channelID: channelID)
-            guard !Task.isCancelled else { return }
-            self?.extraEmotes = emotes
+            guard !Task.isCancelled, let self else { return }
+            extraEmotes = emotes
+            markEmotesLoaded()
         }
+    }
+
+    private func markEmotesLoaded() {
+        guard !emotesLoaded else { return }
+        emotesLoaded = true
+        for item in waiting { stage(expand(item.message)) }
+        waiting = []
     }
 
     func connect(_ channel: String) {
@@ -77,6 +90,12 @@ final class ChatClient {
             var cursor = 0.0, fetchedUntil = -1.0, last = -100.0
             var finished = false, jumped = false
             var jumpDeadline: Date?
+            // Los mensajes se convierten a emotes al pedirlos: primero hace falta la lista de emotes
+            let start = Date()
+            while self?.emotesLoaded == false, Date().timeIntervalSince(start) < 3, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            self?.markEmotesLoaded()
             while !Task.isCancelled {
                 guard let self else { return }
                 let now = position()
@@ -124,7 +143,7 @@ final class ChatClient {
                     queue.removeFirst(due)
                     jumped = false
                 } else if !jumped {
-                    for item in queue.prefix(due) { receive(item.message) }
+                    for item in queue.prefix(due) { stage(item.message) }
                     queue.removeFirst(due)
                 }
                 try? await Task.sleep(for: .milliseconds(250))
@@ -143,6 +162,8 @@ final class ChatClient {
         staged = []
         ready = []
         held = []
+        waiting = []
+        emotesLoaded = false
         pendingCount = 0
         paused = false
     }
@@ -162,7 +183,7 @@ final class ChatClient {
                 if line.hasPrefix("PING") {
                     try? await ws.send(.string("PONG :tmi.twitch.tv"))
                 } else if let parsed = Self.parse(line) {
-                    receive(expand(parsed))
+                    receive(parsed)
                 }
             }
         }
@@ -171,7 +192,16 @@ final class ChatClient {
 
     // MARK: - Ritmo del chat
 
+    /// Mensaje del directo recién llegado, todavía sin emotes de 7TV/BTTV/FFZ.
     private func receive(_ message: ChatMessage) {
+        if emotesLoaded {
+            stage(expand(message))
+        } else {
+            waiting.append((message: message, arrived: Date()))
+        }
+    }
+
+    private func stage(_ message: ChatMessage) {
         EmoteImages.shared.prefetch(message.emoteURLs)
         staged.append((message: message, arrived: Date()))
     }
@@ -187,6 +217,10 @@ final class ChatClient {
     }
 
     private func step() {
+        // Si la lista de emotes no llega en 3 s, el chat sigue sin ellos
+        if !emotesLoaded, let first = waiting.first, first.arrived.timeIntervalSinceNow < -3 {
+            markEmotesLoaded()
+        }
         let images = EmoteImages.shared
         // Sale cuando sus emotes ya están; si una imagen tarda más de 1,2 s, sale igual para no atascar el chat
         while let first = staged.first,
@@ -366,7 +400,8 @@ final class EmoteImages {
         defer { loading.remove(link) }
         guard let url = URL(string: link),
               let data = try? await URLSession.shared.data(from: url).0,
-              let image = UIImage(data: data)?.cgImage else {
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             failed.insert(link)
             return
         }

@@ -2,29 +2,37 @@ import SwiftUI
 
 /// Chat en vivo. Sigue al último mensaje; si subes para leer, se pausa y avisa
 /// de cuántos mensajes nuevos hay en vez de arrastrarte hacia abajo.
+///
+/// La lista va dada la vuelta (lo más nuevo arriba, y luego se voltea la vista
+/// entera): así cada mensaje nuevo entra en la posición 0 y el scroll no tiene que
+/// recolocarse, que era lo que hacía vibrar el chat al cabo de un rato.
 struct ChatView: View {
     let chat: ChatClient
-    @State private var position = ScrollPosition(edge: .bottom)
+    @State private var position = ScrollPosition(edge: .top)
     @State private var interacting = false
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 6) {
-                ForEach(chat.messages) { ChatRow(message: $0) }
+                ForEach(chat.messages.reversed()) { message in
+                    ChatRow(message: message)
+                        .scaleEffect(x: 1, y: -1)
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
         }
+        .scaleEffect(x: 1, y: -1)
         .scrollPosition($position)
-        .defaultScrollAnchor(.bottom)
         .scrollIndicators(.hidden)
         .onScrollPhaseChange { _, phase in
             interacting = phase == .interacting
         }
         .onScrollGeometryChange(for: Bool.self) { geo in
-            geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 30
-        } action: { _, atBottom in
-            if atBottom {
+            // Volteada: el último mensaje está al principio del contenido
+            geo.contentOffset.y + geo.contentInsets.top < 30
+        } action: { _, atNewest in
+            if atNewest {
                 chat.paused = false
             } else if interacting {
                 chat.paused = true
@@ -34,7 +42,7 @@ struct ChatView: View {
             if chat.pendingCount > 0 {
                 Button {
                     chat.paused = false
-                    withAnimation { position.scrollTo(edge: .bottom) }
+                    withAnimation { position.scrollTo(edge: .top) }
                 } label: {
                     Label(chat.pendingCount == 1 ? "1 mensaje nuevo" : "\(chat.pendingCount) mensajes nuevos",
                           systemImage: "arrow.down")
