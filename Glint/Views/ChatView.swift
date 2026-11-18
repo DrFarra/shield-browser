@@ -9,7 +9,8 @@ import SwiftUI
 struct ChatView: View {
     let chat: ChatClient
     @State private var position = ScrollPosition(edge: .top)
-    @State private var interacting = false
+    @State private var phase: ScrollPhase = .idle
+    @State private var atNewest = true
 
     var body: some View {
         ScrollView {
@@ -25,27 +26,30 @@ struct ChatView: View {
         .scaleEffect(x: 1, y: -1)
         .scrollPosition($position)
         .scrollIndicators(.hidden)
-        .onScrollPhaseChange { _, phase in
-            interacting = phase == .interacting
+        // En cuanto el dedo toca el chat se congela, para que nada se mueva bajo el dedo.
+        // Al soltar: si quedó abajo del todo vuelve a seguir el directo; si no, sigue en pausa.
+        .onScrollPhaseChange { _, newPhase in
+            phase = newPhase
+            if newPhase == .interacting {
+                chat.paused = true
+            } else if newPhase == .idle, atNewest {
+                chat.paused = false
+            }
         }
         .onScrollGeometryChange(for: Bool.self) { geo in
             // Volteada: el último mensaje está al principio del contenido
             geo.contentOffset.y + geo.contentInsets.top < 30
-        } action: { _, atNewest in
-            if atNewest {
-                chat.paused = false
-            } else if interacting {
-                chat.paused = true
-            }
+        } action: { _, newest in
+            atNewest = newest
+            if newest, phase == .idle { chat.paused = false }
         }
         .overlay(alignment: .bottom) {
-            if chat.pendingCount > 0 {
+            if chat.paused, !atNewest || chat.pendingCount > 0 {
                 Button {
                     chat.paused = false
                     withAnimation { position.scrollTo(edge: .top) }
                 } label: {
-                    Label(chat.pendingCount == 1 ? "1 mensaje nuevo" : "\(chat.pendingCount) mensajes nuevos",
-                          systemImage: "arrow.down")
+                    Label(pillTitle, systemImage: "arrow.down")
                         .font(.footnote.weight(.semibold))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
@@ -63,11 +67,19 @@ struct ChatView: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .animation(.snappy, value: chat.pendingCount > 0)
+        .animation(.snappy, value: chat.paused && (!atNewest || chat.pendingCount > 0))
         // Al girar el iPhone se cambia de chat (debajo del vídeo ↔ panel lateral):
         // el que aparece arranca siempre siguiendo el último mensaje
         .onAppear { chat.paused = false }
         .onDisappear { chat.paused = false }
+    }
+
+    private var pillTitle: String {
+        switch chat.pendingCount {
+        case 0: "Volver al chat en vivo"
+        case 1: "1 mensaje nuevo"
+        default: "\(chat.pendingCount) mensajes nuevos"
+        }
     }
 }
 

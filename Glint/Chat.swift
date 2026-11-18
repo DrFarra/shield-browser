@@ -273,10 +273,9 @@ final class ChatClient {
             if held.count > 300 { held.removeFirst(held.count - 300) }
             pendingCount = held.count
         } else {
-            withAnimation(.easeOut(duration: 0.2)) {
-                messages += batch
-                if messages.count > 200 { messages.removeFirst(messages.count - 200) }
-            }
+            // Sin animación: con el chat desplazado, una animación movía lo que se estaba leyendo
+            messages += batch
+            if messages.count > 200 { messages.removeFirst(messages.count - 200) }
         }
     }
 
