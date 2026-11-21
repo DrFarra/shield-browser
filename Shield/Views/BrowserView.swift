@@ -531,7 +531,7 @@ private struct StatTile: View {
     }
 }
 
-/// La web a pantalla completa; `bottomInset` deja sitio para el panel flotante.
+/// La web de la pestaña; termina encima del panel flotante para que nada quede tapado.
 struct WebViewContainer: UIViewRepresentable {
     let webView: WKWebView
 
