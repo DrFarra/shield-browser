@@ -431,6 +431,13 @@ private struct ShieldPanel: View {
                         StatTile(value: tab.cosmeticBlocked, label: "Anuncios eliminados", icon: "rectangle.slash")
                     }
 
+                    if !tab.blockedURLs.isEmpty {
+                        BlockedList(urls: tab.blockedURLs) { url in
+                            dismiss()
+                            tab.onOpenInNewTab?(URLRequest(url: url))
+                        }
+                    }
+
                     Toggle(isOn: Binding(get: { tab.shieldsActive }, set: { _ in tab.toggleShieldsForCurrentSite() })) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Escudos en este sitio").font(.body.weight(.medium))
@@ -459,6 +466,40 @@ private struct ShieldPanel: View {
             }
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+}
+
+/// Lo que se bloqueó al tocar en esta página: si era un enlace legítimo, se abre desde aquí.
+private struct BlockedList: View {
+    let urls: [URL]
+    let onOpen: (URL) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Bloqueado en esta página")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+            ForEach(urls, id: \.self) { url in
+                Divider().padding(.leading, 14)
+                Button { onOpen(url) } label: {
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(url.host() ?? url.absoluteString).font(.subheadline.weight(.medium)).lineLimit(1)
+                            Text(url.absoluteString).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 4)
+                        Text("Abrir").font(.subheadline.weight(.semibold)).foregroundStyle(Color.shield)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 
@@ -498,5 +539,7 @@ struct WebViewContainer: UIViewRepresentable {
         guard scroll.contentInset.bottom != bottomInset else { return }
         scroll.contentInset.bottom = bottomInset
         scroll.verticalScrollIndicatorInsets.bottom = bottomInset
+        // Sin esto los elementos fijos de la web (bottom: 0) quedan debajo de la barra y no se pueden tocar.
+        webView.obscuredContentInsets.bottom = bottomInset
     }
 }

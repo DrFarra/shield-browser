@@ -124,8 +124,36 @@
   }
   function blockPopup(url) {
     post({ popupBlocked: url || 'about:blank' });
+    scheduleRescue();
     passThrough();
   }
+
+  // Enlaces que la web abre a su manera (redirección propia, ventana en blanco y luego la
+  // dirección, retrasos…) y que el bloqueo de pop-ups dejaba sin efecto: el toque no hacía nada.
+  // Si al tocar un enlace visible se bloqueó una ventana y la página no navegó por su cuenta,
+  // Shield abre ese enlace en una pestaña nueva.
+  var rescue = 0;
+  function scheduleRescue() {
+    if (rescue || !recentTap() || !lastTap.link || !lastTap.target || !lastTap.target.closest) return;
+    var a = lastTap.target.closest('a[href]');
+    if (!a || a.href !== lastTap.link || isOverlay(a) || !/^https?:/i.test(a.href)) return;
+    var url = a.href, here = location.href, tap = lastTap.time;
+    var newTab = blankAnchor(a) || window !== window.top;
+    rescue = setTimeout(function () {
+      rescue = 0;
+      // la página navegó (o cambió de ruta) o la web ya abrió la pestaña por su cuenta
+      if (leaving || location.href !== here || opened >= tap) return;
+      post({ openLink: url, newTab: newTab, token: token });
+    }, 900);
+  }
+  var leaving = false, opened = 0;
+  window.addEventListener('pagehide', function () { leaving = true; });
+  window.addEventListener('beforeunload', function () { leaving = true; });
+  // El clic del enlace siguió su curso normal: el navegador lo abre; no hay nada que rescatar.
+  window.addEventListener('click', function (e) {
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (a && e.isTrusted && !e.defaultPrevented && /^https?:/i.test(a.href)) opened = Date.now();
+  }, false);
   function fakeWindow() {
     var noop = function () {};
     var w = { closed: false, opener: window, focus: noop, blur: noop, postMessage: noop,
@@ -141,7 +169,13 @@
       u = abs(u);
       if (done || !/^https?:/i.test(u)) return;
       done = true;
-      window.open(u);
+      // Lo abre la app: a estas alturas (tras una espera) WebKit ya no deja abrir ventanas.
+      if (popupAllowed(u)) {
+        opened = Date.now();
+        post({ openLink: u, newTab: true, token: token });
+      } else {
+        blockPopup(u);
+      }
     }
     loc.assign = go; loc.replace = go;
     Object.defineProperty(loc, 'href', { get: function () { return 'about:blank'; }, set: go });
@@ -154,6 +188,7 @@
     var u = url ? abs(url) : '';
     if (popupAllowed(u)) {
       post({ allowPopup: u });
+      opened = Date.now();
       return nativeOpen.apply(window, arguments);
     }
     // Ventana en blanco: aún no hay nada que bloquear; se decide cuando le pongan dirección.
@@ -208,6 +243,7 @@
       e.preventDefault();
       e.stopImmediatePropagation();
       post({ openLink: a.href, newTab: newTab, token: token });
+      opened = Date.now();
       return;
     }
     if (newTab) post({ allowPopup: a.href });

@@ -18,6 +18,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @Published var media: [MediaItem] = []
     @Published var blockedPopup: URL?
     @Published var popupsBlocked = 0
+    /// Últimas direcciones bloqueadas al tocar en esta página (para poder abrirlas a mano).
+    @Published private(set) var blockedURLs: [URL] = []
     /// Vídeo en la capa a pantalla completa (cuando no se puede colocar dentro de la página).
     @Published var nativeVideo: NativeVideo?
     /// Vídeo que espera a que shield.js diga en qué parte de la página está.
@@ -279,7 +281,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         let frame = CGRect(x: value("x") * zoom, y: value("y") * zoom,
                            width: value("w") * zoom, height: value("h") * zoom)
         // Vídeos ocultos o diminutos: no se pueden ver dentro de la página.
-        guard frame.width >= 120, frame.height >= 68 else { return }
+        guard frame.width >= 120, frame.height >= 68 else {
+            if pendingVideo == nil { closeInlinePlayer() }   // ya estaba puesto y el vídeo se ocultó
+            return
+        }
         if let video = pendingVideo {
             pendingVideo = nil
             let player = InlinePlayerView(video: video, tab: self)
@@ -311,6 +316,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     private func noteBlockedPopup(_ url: URL) {
         popupsBlocked += 1
+        if ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+            blockedURLs = Array(([url] + blockedURLs.filter { $0 != url }).prefix(8))
+        }
         ShieldStats.add(1)
         guard ShieldSettings.popupNotice else { return }
         blockedPopup = url
@@ -373,6 +381,7 @@ extension BrowserTab: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         cosmeticBlocked = 0
         popupsBlocked = 0
+        blockedURLs = []
         media = []
         closeInlinePlayer(release: false)
     }

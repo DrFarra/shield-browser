@@ -46,6 +46,7 @@ for mode in light dark; do
   shot "$mode" bookmarks 5
   shot "$mode" settings 5
   shot "$mode" downloads 5
+  shot "$mode" fixed 8
   shot "$mode" media 16
   shot "$mode" tabs 40
 done
