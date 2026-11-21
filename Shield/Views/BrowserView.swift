@@ -47,7 +47,7 @@ private struct TabContent: View {
             .animation(.snappy(duration: 0.25), value: tab.blockedPopup)
         }
         .animation(.snappy(duration: 0.25), value: addressFocused)
-        .background(Color(.systemBackground))
+        .background(tab.url == nil ? Color(.systemBackground) : (tab.pageColor ?? Color(.systemBackground)))
         .sheet(isPresented: $showTabs) { TabsView() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showMedia) { MediaView(tab: tab) }

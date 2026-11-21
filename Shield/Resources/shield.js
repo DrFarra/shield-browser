@@ -270,6 +270,40 @@
     if (newTab) post({ allowPopup: a.href });
   }, true);
 
+  // ---------- Capas invisibles que tapan la pantalla ----------
+  // Un anuncio transparente a pantalla completa (enlace, div o iframe) se queda encima
+  // esperando un toque: impide desplazarse y roba el primer clic. Se desactiva en cuanto
+  // aparece, sin esperar a que el usuario lo toque.
+  function invisibleLayer(el) {
+    if (!el || el === document.body || el === document.documentElement || !el.getBoundingClientRect) return false;
+    if (/^(VIDEO|AUDIO|CANVAS|INPUT|TEXTAREA|SELECT)$/i.test(el.tagName)) return false;
+    var cs = getComputedStyle(el);
+    if (cs.position !== 'fixed' && cs.position !== 'absolute') return false;
+    var r = el.getBoundingClientRect();
+    if (r.width * r.height < 0.6 * innerWidth * innerHeight) return false;
+    if (parseFloat(cs.opacity) < 0.1 || cs.visibility === 'hidden') return true;
+    if (el.tagName === 'IFRAME') return false;   // iframe visible: puede ser un reproductor
+    var bg = cs.backgroundColor.match(/[\d.]+/g);
+    var clear = !bg || (bg.length === 4 && parseFloat(bg[3]) < 0.1);
+    return clear && cs.backgroundImage === 'none' && !el.textContent.trim() &&
+      !el.querySelector('img,video,picture,svg,canvas,iframe,input,button');
+  }
+  function clearInvisibleLayers() {
+    if (!document.elementsFromPoint || !innerWidth || !innerHeight) return;
+    var pts = [[0.5, 0.5], [0.25, 0.3], [0.75, 0.7]];
+    for (var i = 0; i < pts.length; i++) {
+      var list = document.elementsFromPoint(innerWidth * pts[i][0], innerHeight * pts[i][1]);
+      for (var j = 0; j < list.length && j < 3; j++) {
+        if (invisibleLayer(list[j])) {
+          list[j].style.setProperty('pointer-events', 'none', 'important');
+          post({ layerBlocked: 1 });   // cuenta como capa trampa en el panel
+        }
+      }
+    }
+  }
+  setInterval(clearInvisibleLayers, 1000);
+  window.addEventListener('touchstart', clearInvisibleLayers, { capture: true, passive: true });
+
   // ---------- Capas flotantes insertadas por scripts de anuncios ----------
   // "In-page push", falsas alertas del sistema, interstitials, banners pegados...
   // Las redes cambian de dominio a diario, así que no se identifican por nombre

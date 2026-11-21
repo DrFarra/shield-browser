@@ -20,6 +20,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @Published var popupsBlocked = 0
     /// Últimas direcciones bloqueadas al tocar en esta página (para poder abrirlas a mano).
     @Published private(set) var blockedURLs: [URL] = []
+    /// Color de fondo de la página: rellena el hueco bajo el panel para que no quede un recuadro.
+    @Published private(set) var pageColor: Color?
     /// Diagnóstico del último enlace tocado: dirección y qué hizo Shield / la web con él.
     @Published private(set) var lastLink: (url: String, notes: [String])?
     /// Vídeo en la capa a pantalla completa (cuando no se puede colocar dentro de la página).
@@ -274,6 +276,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                 webView.load(URLRequest(url: url))
             }
         }
+        if body["layerBlocked"] != nil {
+            popupsBlocked += 1
+            ShieldStats.add(1)
+        }
         if body["tap"] != nil { lastTapAt = Date() }
         if body["back"] != nil { backAt = Date() }   // atrás dentro de la misma página (popstate)
         if let video = NativeVideo(body) {
@@ -457,6 +463,7 @@ extension BrowserTab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        pageColor = Color(uiColor: webView.underPageBackgroundColor)
         recordVisit()
         guard !isPrivate, let url = webView.url else { return }
         Task {
