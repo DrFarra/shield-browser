@@ -35,6 +35,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// Pestaña desde la que se abrió esta (enlace en pestaña nueva).
     weak var opener: BrowserTab?
     var onBackToOpener: (() -> Void)?
+    /// Lo asigna TabManager: si es la pestaña que se está viendo.
+    var isForeground: () -> Bool = { true }
+
+    /// Para frenar redirecciones a anuncios que la web lanza sola (ver `isAdRedirect`).
+    private var backAt: Date?
+    private var lastTapAt = Date.distantPast
 
     private var observations: [NSKeyValueObservation] = []
     private var appliedShields: Bool?
@@ -86,6 +92,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     func load(_ input: String) {
         guard let target = URLBuilder.url(from: input) else { return }
+        backAt = nil
         applyShields(for: target.host())
         webView.load(URLRequest(url: target))
     }
@@ -95,7 +102,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         webView.reload()
     }
 
-    func goBack() { webView.goBack() }
+    func goBack() {
+        backAt = Date()
+        webView.goBack()
+    }
     func goForward() { webView.goForward() }
     func stop() { webView.stopLoading() }
 
@@ -246,10 +256,13 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             if body["newTab"] as? Bool == true {
                 onOpenInNewTab?(URLRequest(url: url))
             } else if message.frameInfo.isMainFrame {
+                backAt = nil
                 applyShields(for: url.host())
                 webView.load(URLRequest(url: url))
             }
         }
+        if body["tap"] != nil { lastTapAt = Date() }
+        if body["back"] != nil { backAt = Date() }   // atrás dentro de la misma página (popstate)
         if let video = NativeVideo(body) {
             closeInlinePlayer(release: false)
             pendingVideo = video
@@ -366,6 +379,11 @@ extension BrowserTab: WKNavigationDelegate {
         guard let url = navigationAction.request.url else { return (.cancel, preferences) }
         let scheme = url.scheme?.lowercased() ?? ""
         if ["http", "https", "about", "data", "blob", "file"].contains(scheme) {
+            if navigationAction.navigationType == .backForward { backAt = Date() }
+            if isAdRedirect(navigationAction) {
+                noteBlockedPopup(url)
+                return (.cancel, preferences)
+            }
             if navigationAction.targetFrame?.isMainFrame ?? true {
                 applyShields(for: url.host())
             }
@@ -376,6 +394,20 @@ extension BrowserTab: WKNavigationDelegate {
             _ = await UIApplication.shared.open(url)
         }
         return (.cancel, preferences)
+    }
+
+    /// La página se manda sola a otro sitio (script, no un toque) justo cuando el usuario no
+    /// la controla: en una pestaña en segundo plano ("tab-under": al volver, había un anuncio)
+    /// o tras darle a atrás sin tocar nada (trampas que convierten "atrás" en publicidad).
+    /// shortcut: ventana de 10 s tras "atrás" sin toques; si bloquea algo legítimo, sale en el panel con "Abrir".
+    private func isAdRedirect(_ action: WKNavigationAction) -> Bool {
+        guard shieldsActive, action.navigationType == .other,
+              action.targetFrame?.isMainFrame ?? false,
+              let current = webView.url, ["http", "https"].contains(current.scheme ?? ""),
+              !URLBuilder.sameSite(action.request.url, current) else { return false }
+        if !isForeground() { return true }
+        guard let backAt, Date().timeIntervalSince(backAt) < 10 else { return false }
+        return lastTapAt < backAt
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {

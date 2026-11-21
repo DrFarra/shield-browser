@@ -44,7 +44,10 @@
   // el primer toque para abrir un anuncio. Lo detectamos, lo desactivamos y
   // reenviamos el toque al elemento real que hay debajo (p. ej. la imagen).
   var lastTap = { target: null, link: null, x: 0, y: 0, time: 0 };
+  var tapPosted = 0;
   function onTap(e) {
+    // La app distingue así lo que hace el usuario de lo que la web hace sola.
+    if (Date.now() - tapPosted > 300) { tapPosted = Date.now(); post({ tap: 1 }); }
     var t = e.touches && e.touches[0] ? e.touches[0] : e;
     var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
     var real = a && !/^(javascript:|#)/i.test(a.getAttribute('href') || '');
@@ -61,6 +64,9 @@
   }
   window.addEventListener('touchstart', onTap, { capture: true, passive: true });
   window.addEventListener('pointerdown', onTap, true);
+
+  // "Atrás" dentro de la misma página: punto de partida de las trampas que redirigen a anuncios.
+  if (window === window.top) window.addEventListener('popstate', function () { post({ back: 1 }); }, true);
 
   function recentTap() { return Date.now() - lastTap.time < 1500; }
 
