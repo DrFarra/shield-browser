@@ -47,7 +47,7 @@ private struct TabContent: View {
             .animation(.snappy(duration: 0.25), value: tab.blockedPopup)
         }
         .animation(.snappy(duration: 0.25), value: addressFocused)
-        .background(Color(.systemBackground))
+        .background(tab.url == nil ? Color(.systemBackground) : (tab.pageColor ?? Color(.systemBackground)))
         .sheet(isPresented: $showTabs) { TabsView() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showMedia) { MediaView(tab: tab) }
@@ -64,7 +64,7 @@ private struct TabContent: View {
         }
         .animation(.snappy(duration: 0.3), value: tab.nativeVideo?.id)
         .statusBarHidden(tab.nativeVideo != nil)
-        .sheet(isPresented: $showDownloads) { NavigationStack { DownloadsView() } }
+        .sheet(isPresented: $showDownloads) { NavigationStack { DownloadsView(showsDone: true) } }
         .sheet(isPresented: $showHistory) { HistoryView { openURL($0, newTab: $1) } }
         .sheet(isPresented: $showBookmarks) { BookmarksView { openURL($0, newTab: $1) } }
         .sheet(item: $editingBookmark) { BookmarkEditor(bookmark: $0) }
@@ -81,8 +81,12 @@ private struct TabContent: View {
 
     @ViewBuilder private var content: some View {
         ZStack {
-            WebViewContainer(webView: tab.webView, bottomInset: panelHeight)
-                .ignoresSafeArea()
+            // La web termina justo encima de la barra: si pasa por debajo, sus botones fijos
+            // de abajo quedan tapados y no se pueden tocar (obscuredContentInsets no bastó).
+            WebViewContainer(webView: tab.webView)
+                .padding(.bottom, panelHeight)
+                .ignoresSafeArea(.container, edges: .top)
+                .ignoresSafeArea(.keyboard)
                 .opacity(tab.url == nil ? 0 : 1)
             if tab.url == nil {
                 StartPageView(isPrivate: tab.isPrivate) { openURL($0, newTab: $1) }
@@ -300,6 +304,7 @@ private struct TabContent: View {
         case "settings": showSettings = true
         case "shield": showShieldPanel = true
         case "media": showMedia = true
+        case "downloads": showDownloads = true
         case "suggest":
             addressFocused = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { query = "wi" }
@@ -430,6 +435,17 @@ private struct ShieldPanel: View {
                         StatTile(value: tab.cosmeticBlocked, label: "Anuncios eliminados", icon: "rectangle.slash")
                     }
 
+                    if let link = tab.lastLink {
+                        LinkDiagnosis(url: link.url, notes: link.notes)
+                    }
+
+                    if !tab.blockedURLs.isEmpty {
+                        BlockedList(urls: tab.blockedURLs) { url in
+                            dismiss()
+                            tab.onOpenInNewTab?(URLRequest(url: url))
+                        }
+                    }
+
                     Toggle(isOn: Binding(get: { tab.shieldsActive }, set: { _ in tab.toggleShieldsForCurrentSite() })) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Escudos en este sitio").font(.body.weight(.medium))
@@ -461,6 +477,68 @@ private struct ShieldPanel: View {
     }
 }
 
+/// Qué pasó con el último enlace tocado: sirve para averiguar por qué uno "no hace nada".
+private struct LinkDiagnosis: View {
+    let url: String
+    let notes: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Último enlace tocado").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    UIPasteboard.general.string = ([url] + notes).joined(separator: "\n")
+                } label: {
+                    Label("Copiar", systemImage: "doc.on.doc").font(.footnote.weight(.semibold))
+                }
+                .tint(.shield)
+            }
+            Text(url).font(.caption.monospaced()).lineLimit(2).textSelection(.enabled)
+            ForEach(notes, id: \.self) { note in
+                Label(note, systemImage: "arrow.turn.down.right").font(.subheadline)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+/// Lo que se bloqueó al tocar en esta página: si era un enlace legítimo, se abre desde aquí.
+private struct BlockedList: View {
+    let urls: [URL]
+    let onOpen: (URL) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Bloqueado en esta página")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+            ForEach(urls, id: \.self) { url in
+                Divider().padding(.leading, 14)
+                Button { onOpen(url) } label: {
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(url.host() ?? url.absoluteString).font(.subheadline.weight(.medium)).lineLimit(1)
+                            Text(url.absoluteString).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 4)
+                        Text("Abrir").font(.subheadline.weight(.semibold)).foregroundStyle(Color.shield)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
 private struct StatTile: View {
     let value: Int
     let label: String
@@ -485,17 +563,11 @@ private struct StatTile: View {
     }
 }
 
-/// La web a pantalla completa; `bottomInset` deja sitio para el panel flotante.
+/// La web de la pestaña; termina encima del panel flotante para que nada quede tapado.
 struct WebViewContainer: UIViewRepresentable {
     let webView: WKWebView
-    var bottomInset: CGFloat = 0
 
     func makeUIView(context: Context) -> WKWebView { webView }
 
-    func updateUIView(_ webView: WKWebView, context: Context) {
-        let scroll = webView.scrollView
-        guard scroll.contentInset.bottom != bottomInset else { return }
-        scroll.contentInset.bottom = bottomInset
-        scroll.verticalScrollIndicatorInsets.bottom = bottomInset
-    }
+    func updateUIView(_ webView: WKWebView, context: Context) {}
 }

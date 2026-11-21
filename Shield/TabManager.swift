@@ -46,6 +46,7 @@ final class TabManager: ObservableObject {
             let child = self?.newTab(isPrivate: tab?.isPrivate ?? false, request: request)
             child?.opener = tab
         }
+        tab.isForeground = { [weak self, weak tab] in self?.selectedID == tab?.id }
         tab.onBackToOpener = { [weak self, weak tab] in
             if let self, let tab { self.goBack(in: tab) }
         }

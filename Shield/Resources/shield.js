@@ -44,11 +44,23 @@
   // el primer toque para abrir un anuncio. Lo detectamos, lo desactivamos y
   // reenviamos el toque al elemento real que hay debajo (p. ej. la imagen).
   var lastTap = { target: null, link: null, x: 0, y: 0, time: 0 };
+  // Diagnóstico: qué fue del último enlace tocado (se muestra en el panel del escudo).
+  var clickSeen = 0;
+  function logLink(href, what) { post({ linkLog: what, href: href }); }
+  var tapPosted = 0;
   function onTap(e) {
+    // La app distingue así lo que hace el usuario de lo que la web hace sola.
+    if (Date.now() - tapPosted > 300) { tapPosted = Date.now(); post({ tap: 1 }); }
     var t = e.touches && e.touches[0] ? e.touches[0] : e;
     var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
     var real = a && !/^(javascript:|#)/i.test(a.getAttribute('href') || '');
     lastTap = { target: e.target, link: real ? a.href : null, x: t.clientX, y: t.clientY, time: Date.now() };
+    if (real && e.type === 'touchstart') {
+      var tapTime = lastTap.time, href = a.href;
+      setTimeout(function () {
+        if (clickSeen < tapTime && lastTap.time === tapTime) logLink(href, 'La web no dejó que llegara el toque al enlace');
+      }, 900);
+    }
     // Sin "playsinline" el iPhone abre el vídeo de la web a pantalla completa
     // por encima del reproductor nativo.
     if (window.__shieldNativePlayer) {
@@ -61,6 +73,9 @@
   }
   window.addEventListener('touchstart', onTap, { capture: true, passive: true });
   window.addEventListener('pointerdown', onTap, true);
+
+  // "Atrás" dentro de la misma página: punto de partida de las trampas que redirigen a anuncios.
+  if (window === window.top) window.addEventListener('popstate', function () { post({ back: 1 }); }, true);
 
   function recentTap() { return Date.now() - lastTap.time < 1500; }
 
@@ -124,8 +139,39 @@
   }
   function blockPopup(url) {
     post({ popupBlocked: url || 'about:blank' });
+    scheduleRescue();
     passThrough();
   }
+
+  // Enlaces que la web abre a su manera (redirección propia, ventana en blanco y luego la
+  // dirección, retrasos…) y que el bloqueo de pop-ups dejaba sin efecto: el toque no hacía nada.
+  // Si al tocar un enlace visible se bloqueó una ventana y la página no navegó por su cuenta,
+  // Shield abre ese enlace en una pestaña nueva.
+  var rescue = 0;
+  function scheduleRescue() {
+    if (rescue || !recentTap() || !lastTap.link || !lastTap.target || !lastTap.target.closest) return;
+    var a = lastTap.target.closest('a[href]');
+    if (!a || a.href !== lastTap.link || isOverlay(a) || !/^https?:/i.test(a.href)) return;
+    var url = a.href, here = location.href, tap = lastTap.time;
+    var newTab = blankAnchor(a) || window !== window.top;
+    rescue = setTimeout(function () {
+      rescue = 0;
+      // la página navegó (o cambió de ruta) o la web ya abrió la pestaña por su cuenta
+      if (leaving || location.href !== here || opened >= tap) return;
+      post({ openLink: url, newTab: newTab, token: token });
+    }, 900);
+  }
+  var leaving = false, opened = 0;
+  window.addEventListener('pagehide', function () { leaving = true; });
+  window.addEventListener('beforeunload', function () { leaving = true; });
+  // El clic del enlace siguió su curso normal: el navegador lo abre; no hay nada que rescatar.
+  window.addEventListener('click', function (e) {
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a || !e.isTrusted) return;
+    if (!e.defaultPrevented && /^https?:/i.test(a.href)) opened = Date.now();
+    logLink(a.href, e.defaultPrevented ? 'La web canceló el clic y lo gestiona ella'
+                                       : 'Clic normal: lo abre el navegador');
+  }, false);
   function fakeWindow() {
     var noop = function () {};
     var w = { closed: false, opener: window, focus: noop, blur: noop, postMessage: noop,
@@ -141,7 +187,13 @@
       u = abs(u);
       if (done || !/^https?:/i.test(u)) return;
       done = true;
-      window.open(u);
+      // Lo abre la app: a estas alturas (tras una espera) WebKit ya no deja abrir ventanas.
+      if (popupAllowed(u)) {
+        opened = Date.now();
+        post({ openLink: u, newTab: true, token: token });
+      } else {
+        blockPopup(u);
+      }
     }
     loc.assign = go; loc.replace = go;
     Object.defineProperty(loc, 'href', { get: function () { return 'about:blank'; }, set: go });
@@ -154,6 +206,7 @@
     var u = url ? abs(url) : '';
     if (popupAllowed(u)) {
       post({ allowPopup: u });
+      opened = Date.now();
       return nativeOpen.apply(window, arguments);
     }
     // Ventana en blanco: aún no hay nada que bloquear; se decide cuando le pongan dirección.
@@ -193,10 +246,12 @@
         return;
       }
     }
+    if (a && e.isTrusted) clickSeen = Date.now();
     if (!a || /^(javascript|#)/i.test(a.getAttribute('href') || '')) return;
     if (!sameSite(a.href) && isOverlay(a)) {
       e.preventDefault();
       e.stopImmediatePropagation();
+      logLink(a.href, 'Shield lo bloqueó: parecía una capa invisible de anuncio');
       blockPopup(a.href);
       return;
     }
@@ -208,10 +263,46 @@
       e.preventDefault();
       e.stopImmediatePropagation();
       post({ openLink: a.href, newTab: newTab, token: token });
+      logLink(a.href, newTab ? 'Shield lo abre en una pestaña nueva' : 'Shield lo abre en esta pestaña');
+      opened = Date.now();
       return;
     }
     if (newTab) post({ allowPopup: a.href });
   }, true);
+
+  // ---------- Capas invisibles que tapan la pantalla ----------
+  // Un anuncio transparente a pantalla completa (enlace, div o iframe) se queda encima
+  // esperando un toque: impide desplazarse y roba el primer clic. Se desactiva en cuanto
+  // aparece, sin esperar a que el usuario lo toque.
+  function invisibleLayer(el) {
+    if (!el || el === document.body || el === document.documentElement || !el.getBoundingClientRect) return false;
+    if (/^(VIDEO|AUDIO|CANVAS|INPUT|TEXTAREA|SELECT)$/i.test(el.tagName)) return false;
+    var cs = getComputedStyle(el);
+    if (cs.position !== 'fixed' && cs.position !== 'absolute') return false;
+    var r = el.getBoundingClientRect();
+    if (r.width * r.height < 0.6 * innerWidth * innerHeight) return false;
+    if (parseFloat(cs.opacity) < 0.1 || cs.visibility === 'hidden') return true;
+    if (el.tagName === 'IFRAME') return false;   // iframe visible: puede ser un reproductor
+    var bg = cs.backgroundColor.match(/[\d.]+/g);
+    var clear = !bg || (bg.length === 4 && parseFloat(bg[3]) < 0.1);
+    return clear && cs.backgroundImage === 'none' && !el.textContent.trim() &&
+      !el.querySelector('img,video,picture,svg,canvas,iframe,input,button');
+  }
+  function clearInvisibleLayers() {
+    if (!document.elementsFromPoint || !innerWidth || !innerHeight) return;
+    var pts = [[0.5, 0.5], [0.25, 0.3], [0.75, 0.7]];
+    for (var i = 0; i < pts.length; i++) {
+      var list = document.elementsFromPoint(innerWidth * pts[i][0], innerHeight * pts[i][1]);
+      for (var j = 0; j < list.length && j < 3; j++) {
+        if (invisibleLayer(list[j])) {
+          list[j].style.setProperty('pointer-events', 'none', 'important');
+          post({ layerBlocked: 1 });   // cuenta como capa trampa en el panel
+        }
+      }
+    }
+  }
+  setInterval(clearInvisibleLayers, 1000);
+  window.addEventListener('touchstart', clearInvisibleLayers, { capture: true, passive: true });
 
   // ---------- Capas flotantes insertadas por scripts de anuncios ----------
   // "In-page push", falsas alertas del sistema, interstitials, banners pegados...
@@ -334,6 +425,7 @@
   var queue = [];
   var flushTimer = null;
   function addMedia(kind, url, extra) {
+    if (!url) return;   // sin src: abs() devolvería la propia página o ".../null"
     url = abs(url);
     if (!url || /^(blob|data|about|javascript):/i.test(url)) return;
     var key = kind + url;

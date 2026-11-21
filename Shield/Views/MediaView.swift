@@ -6,9 +6,11 @@ struct MediaView: View {
     @ObservedObject var tab: BrowserTab
     @Environment(\.dismiss) private var dismiss
     @State private var started: Set<String> = []
+    /// Enlaces con pinta de imagen que no lo son (p. ej. páginas "Archivo:foto.jpg").
+    @State private var broken: Set<String> = []
 
     private var videos: [MediaItem] { tab.media.filter { $0.kind != .image } }
-    private var images: [MediaItem] { tab.media.filter { $0.kind == .image } }
+    private var images: [MediaItem] { tab.media.filter { $0.kind == .image && !broken.contains($0.id) } }
 
     var body: some View {
         NavigationStack {
@@ -47,7 +49,7 @@ struct MediaView: View {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 8)], spacing: 8) {
                             ForEach(images) { item in
                                 Button { start(item) } label: {
-                                    Thumbnail(url: item.url, icon: "photo", size: 96)
+                                    Thumbnail(url: item.url, icon: "photo", size: 96) { broken.insert(item.id) }
                                         .overlay(alignment: .bottomTrailing) {
                                             Image(systemName: started.contains(item.id) ? "checkmark.circle.fill" : "arrow.down.circle.fill")
                                                 .font(.title3)
@@ -112,6 +114,7 @@ private struct Thumbnail: View {
     let url: URL?
     let icon: String
     var size: CGFloat = 56
+    var onFail: () -> Void = {}
 
     var body: some View {
         ZStack {
@@ -120,6 +123,8 @@ private struct Thumbnail: View {
                 AsyncImage(url: url) { phase in
                     if let image = phase.image {
                         image.resizable().scaledToFill()
+                    } else if phase.error != nil {
+                        Color.clear.onAppear(perform: onFail)
                     } else {
                         Image(systemName: icon).foregroundStyle(Color.shield)
                     }

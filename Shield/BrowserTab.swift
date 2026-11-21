@@ -18,6 +18,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @Published var media: [MediaItem] = []
     @Published var blockedPopup: URL?
     @Published var popupsBlocked = 0
+    /// Últimas direcciones bloqueadas al tocar en esta página (para poder abrirlas a mano).
+    @Published private(set) var blockedURLs: [URL] = []
+    /// Color de fondo de la página: rellena el hueco bajo el panel para que no quede un recuadro.
+    @Published private(set) var pageColor: Color?
+    /// Diagnóstico del último enlace tocado: dirección y qué hizo Shield / la web con él.
+    @Published private(set) var lastLink: (url: String, notes: [String])?
     /// Vídeo en la capa a pantalla completa (cuando no se puede colocar dentro de la página).
     @Published var nativeVideo: NativeVideo?
     /// Vídeo que espera a que shield.js diga en qué parte de la página está.
@@ -33,6 +39,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// Pestaña desde la que se abrió esta (enlace en pestaña nueva).
     weak var opener: BrowserTab?
     var onBackToOpener: (() -> Void)?
+    /// Lo asigna TabManager: si es la pestaña que se está viendo.
+    var isForeground: () -> Bool = { true }
+
+    /// Para frenar redirecciones a anuncios que la web lanza sola (ver `isAdRedirect`).
+    private var backAt: Date?
+    private var lastTapAt = Date.distantPast
 
     private var observations: [NSKeyValueObservation] = []
     private var appliedShields: Bool?
@@ -84,6 +96,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     func load(_ input: String) {
         guard let target = URLBuilder.url(from: input) else { return }
+        backAt = nil
         applyShields(for: target.host())
         webView.load(URLRequest(url: target))
     }
@@ -93,7 +106,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         webView.reload()
     }
 
-    func goBack() { webView.goBack() }
+    func goBack() {
+        backAt = Date()
+        webView.goBack()
+    }
     func goForward() { webView.goForward() }
     func stop() { webView.stopLoading() }
 
@@ -239,15 +255,33 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         if let url = (body["popupBlocked"] as? String).flatMap({ URL(string: $0) }) {
             noteBlockedPopup(url)
         }
+        if let what = body["linkLog"] as? String {
+            let href = body["href"] as? String ?? ""
+            if lastLink?.url == href, let notes = lastLink?.notes, notes.last != what {
+                lastLink = (href, Array((notes + [what]).suffix(4)))
+            } else if lastLink?.url != href {
+                lastLink = (href, [what])
+            }
+        }
+        if let link = body["openLink"] as? String, body["token"] as? String != linkToken {
+            noteLink(link, "La app rechazó abrirlo: la página no tenía la clave de Shield")
+        }
         if let link = body["openLink"] as? String, body["token"] as? String == linkToken,
            let url = URL(string: link), ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
             if body["newTab"] as? Bool == true {
                 onOpenInNewTab?(URLRequest(url: url))
             } else if message.frameInfo.isMainFrame {
+                backAt = nil
                 applyShields(for: url.host())
                 webView.load(URLRequest(url: url))
             }
         }
+        if body["layerBlocked"] != nil {
+            popupsBlocked += 1
+            ShieldStats.add(1)
+        }
+        if body["tap"] != nil { lastTapAt = Date() }
+        if body["back"] != nil { backAt = Date() }   // atrás dentro de la misma página (popstate)
         if let video = NativeVideo(body) {
             closeInlinePlayer(release: false)
             pendingVideo = video
@@ -279,7 +313,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         let frame = CGRect(x: value("x") * zoom, y: value("y") * zoom,
                            width: value("w") * zoom, height: value("h") * zoom)
         // Vídeos ocultos o diminutos: no se pueden ver dentro de la página.
-        guard frame.width >= 120, frame.height >= 68 else { return }
+        guard frame.width >= 120, frame.height >= 68 else {
+            if pendingVideo == nil { closeInlinePlayer() }   // ya estaba puesto y el vídeo se ocultó
+            return
+        }
         if let video = pendingVideo {
             pendingVideo = nil
             let player = InlinePlayerView(video: video, tab: self)
@@ -311,6 +348,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     private func noteBlockedPopup(_ url: URL) {
         popupsBlocked += 1
+        if ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+            blockedURLs = Array(([url] + blockedURLs.filter { $0 != url }).prefix(8))
+        }
         ShieldStats.add(1)
         guard ShieldSettings.popupNotice else { return }
         blockedPopup = url
@@ -358,6 +398,12 @@ extension BrowserTab: WKNavigationDelegate {
         guard let url = navigationAction.request.url else { return (.cancel, preferences) }
         let scheme = url.scheme?.lowercased() ?? ""
         if ["http", "https", "about", "data", "blob", "file"].contains(scheme) {
+            if navigationAction.navigationType == .backForward { backAt = Date() }
+            if isAdRedirect(navigationAction) {
+                noteLink(url.absoluteString, "Shield frenó la navegación: parecía una redirección a un anuncio")
+                noteBlockedPopup(url)
+                return (.cancel, preferences)
+            }
             if navigationAction.targetFrame?.isMainFrame ?? true {
                 applyShields(for: url.host())
             }
@@ -370,9 +416,29 @@ extension BrowserTab: WKNavigationDelegate {
         return (.cancel, preferences)
     }
 
+    /// La página se manda sola a otro sitio (script, no un toque) justo cuando el usuario no
+    /// la controla: en una pestaña en segundo plano ("tab-under": al volver, había un anuncio)
+    /// o tras darle a atrás sin tocar nada (trampas que convierten "atrás" en publicidad).
+    /// shortcut: ventana de 10 s tras "atrás" sin toques; si bloquea algo legítimo, sale en el panel con "Abrir".
+    private func noteLink(_ href: String, _ what: String) {
+        let notes = lastLink?.url == href ? (lastLink?.notes ?? []) : []
+        lastLink = (href, Array((notes + [what]).suffix(4)))
+    }
+
+    private func isAdRedirect(_ action: WKNavigationAction) -> Bool {
+        guard shieldsActive, action.navigationType == .other,
+              action.targetFrame?.isMainFrame ?? false,
+              let current = webView.url, ["http", "https"].contains(current.scheme ?? ""),
+              !URLBuilder.sameSite(action.request.url, current) else { return false }
+        if !isForeground() { return true }
+        guard let backAt, Date().timeIntervalSince(backAt) < 10 else { return false }
+        return lastTapAt < backAt
+    }
+
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         cosmeticBlocked = 0
         popupsBlocked = 0
+        blockedURLs = []
         media = []
         closeInlinePlayer(release: false)
     }
@@ -397,6 +463,7 @@ extension BrowserTab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        pageColor = Color(uiColor: webView.underPageBackgroundColor)
         recordVisit()
         guard !isPrivate, let url = webView.url else { return }
         Task {
