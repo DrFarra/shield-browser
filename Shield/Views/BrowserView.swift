@@ -81,8 +81,12 @@ private struct TabContent: View {
 
     @ViewBuilder private var content: some View {
         ZStack {
-            WebViewContainer(webView: tab.webView, bottomInset: panelHeight)
-                .ignoresSafeArea()
+            // La web termina justo encima de la barra: si pasa por debajo, sus botones fijos
+            // de abajo quedan tapados y no se pueden tocar (obscuredContentInsets no bastó).
+            WebViewContainer(webView: tab.webView)
+                .padding(.bottom, panelHeight)
+                .ignoresSafeArea(.container, edges: .top)
+                .ignoresSafeArea(.keyboard)
                 .opacity(tab.url == nil ? 0 : 1)
             if tab.url == nil {
                 StartPageView(isPrivate: tab.isPrivate) { openURL($0, newTab: $1) }
@@ -530,16 +534,8 @@ private struct StatTile: View {
 /// La web a pantalla completa; `bottomInset` deja sitio para el panel flotante.
 struct WebViewContainer: UIViewRepresentable {
     let webView: WKWebView
-    var bottomInset: CGFloat = 0
 
     func makeUIView(context: Context) -> WKWebView { webView }
 
-    func updateUIView(_ webView: WKWebView, context: Context) {
-        let scroll = webView.scrollView
-        guard scroll.contentInset.bottom != bottomInset else { return }
-        scroll.contentInset.bottom = bottomInset
-        scroll.verticalScrollIndicatorInsets.bottom = bottomInset
-        // Sin esto los elementos fijos de la web (bottom: 0) quedan debajo de la barra y no se pueden tocar.
-        webView.obscuredContentInsets.bottom = bottomInset
-    }
+    func updateUIView(_ webView: WKWebView, context: Context) {}
 }
