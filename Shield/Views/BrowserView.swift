@@ -435,6 +435,10 @@ private struct ShieldPanel: View {
                         StatTile(value: tab.cosmeticBlocked, label: "Anuncios eliminados", icon: "rectangle.slash")
                     }
 
+                    if let link = tab.lastLink {
+                        LinkDiagnosis(url: link.url, notes: link.notes)
+                    }
+
                     if !tab.blockedURLs.isEmpty {
                         BlockedList(urls: tab.blockedURLs) { url in
                             dismiss()
@@ -470,6 +474,34 @@ private struct ShieldPanel: View {
             }
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+}
+
+/// Qué pasó con el último enlace tocado: sirve para averiguar por qué uno "no hace nada".
+private struct LinkDiagnosis: View {
+    let url: String
+    let notes: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Último enlace tocado").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    UIPasteboard.general.string = ([url] + notes).joined(separator: "\n")
+                } label: {
+                    Label("Copiar", systemImage: "doc.on.doc").font(.footnote.weight(.semibold))
+                }
+                .tint(.shield)
+            }
+            Text(url).font(.caption.monospaced()).lineLimit(2).textSelection(.enabled)
+            ForEach(notes, id: \.self) { note in
+                Label(note, systemImage: "arrow.turn.down.right").font(.subheadline)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 

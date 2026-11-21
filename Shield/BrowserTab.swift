@@ -20,6 +20,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @Published var popupsBlocked = 0
     /// Últimas direcciones bloqueadas al tocar en esta página (para poder abrirlas a mano).
     @Published private(set) var blockedURLs: [URL] = []
+    /// Diagnóstico del último enlace tocado: dirección y qué hizo Shield / la web con él.
+    @Published private(set) var lastLink: (url: String, notes: [String])?
     /// Vídeo en la capa a pantalla completa (cuando no se puede colocar dentro de la página).
     @Published var nativeVideo: NativeVideo?
     /// Vídeo que espera a que shield.js diga en qué parte de la página está.
@@ -251,6 +253,17 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         if let url = (body["popupBlocked"] as? String).flatMap({ URL(string: $0) }) {
             noteBlockedPopup(url)
         }
+        if let what = body["linkLog"] as? String {
+            let href = body["href"] as? String ?? ""
+            if lastLink?.url == href, let notes = lastLink?.notes, notes.last != what {
+                lastLink = (href, Array((notes + [what]).suffix(4)))
+            } else if lastLink?.url != href {
+                lastLink = (href, [what])
+            }
+        }
+        if let link = body["openLink"] as? String, body["token"] as? String != linkToken {
+            noteLink(link, "La app rechazó abrirlo: la página no tenía la clave de Shield")
+        }
         if let link = body["openLink"] as? String, body["token"] as? String == linkToken,
            let url = URL(string: link), ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
             if body["newTab"] as? Bool == true {
@@ -381,6 +394,7 @@ extension BrowserTab: WKNavigationDelegate {
         if ["http", "https", "about", "data", "blob", "file"].contains(scheme) {
             if navigationAction.navigationType == .backForward { backAt = Date() }
             if isAdRedirect(navigationAction) {
+                noteLink(url.absoluteString, "Shield frenó la navegación: parecía una redirección a un anuncio")
                 noteBlockedPopup(url)
                 return (.cancel, preferences)
             }
@@ -400,6 +414,11 @@ extension BrowserTab: WKNavigationDelegate {
     /// la controla: en una pestaña en segundo plano ("tab-under": al volver, había un anuncio)
     /// o tras darle a atrás sin tocar nada (trampas que convierten "atrás" en publicidad).
     /// shortcut: ventana de 10 s tras "atrás" sin toques; si bloquea algo legítimo, sale en el panel con "Abrir".
+    private func noteLink(_ href: String, _ what: String) {
+        let notes = lastLink?.url == href ? (lastLink?.notes ?? []) : []
+        lastLink = (href, Array((notes + [what]).suffix(4)))
+    }
+
     private func isAdRedirect(_ action: WKNavigationAction) -> Bool {
         guard shieldsActive, action.navigationType == .other,
               action.targetFrame?.isMainFrame ?? false,

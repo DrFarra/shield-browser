@@ -44,6 +44,9 @@
   // el primer toque para abrir un anuncio. Lo detectamos, lo desactivamos y
   // reenviamos el toque al elemento real que hay debajo (p. ej. la imagen).
   var lastTap = { target: null, link: null, x: 0, y: 0, time: 0 };
+  // Diagnóstico: qué fue del último enlace tocado (se muestra en el panel del escudo).
+  var clickSeen = 0;
+  function logLink(href, what) { post({ linkLog: what, href: href }); }
   var tapPosted = 0;
   function onTap(e) {
     // La app distingue así lo que hace el usuario de lo que la web hace sola.
@@ -52,6 +55,12 @@
     var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
     var real = a && !/^(javascript:|#)/i.test(a.getAttribute('href') || '');
     lastTap = { target: e.target, link: real ? a.href : null, x: t.clientX, y: t.clientY, time: Date.now() };
+    if (real && e.type === 'touchstart') {
+      var tapTime = lastTap.time, href = a.href;
+      setTimeout(function () {
+        if (clickSeen < tapTime && lastTap.time === tapTime) logLink(href, 'La web no dejó que llegara el toque al enlace');
+      }, 900);
+    }
     // Sin "playsinline" el iPhone abre el vídeo de la web a pantalla completa
     // por encima del reproductor nativo.
     if (window.__shieldNativePlayer) {
@@ -158,7 +167,10 @@
   // El clic del enlace siguió su curso normal: el navegador lo abre; no hay nada que rescatar.
   window.addEventListener('click', function (e) {
     var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
-    if (a && e.isTrusted && !e.defaultPrevented && /^https?:/i.test(a.href)) opened = Date.now();
+    if (!a || !e.isTrusted) return;
+    if (!e.defaultPrevented && /^https?:/i.test(a.href)) opened = Date.now();
+    logLink(a.href, e.defaultPrevented ? 'La web canceló el clic y lo gestiona ella'
+                                       : 'Clic normal: lo abre el navegador');
   }, false);
   function fakeWindow() {
     var noop = function () {};
@@ -234,10 +246,12 @@
         return;
       }
     }
+    if (a && e.isTrusted) clickSeen = Date.now();
     if (!a || /^(javascript|#)/i.test(a.getAttribute('href') || '')) return;
     if (!sameSite(a.href) && isOverlay(a)) {
       e.preventDefault();
       e.stopImmediatePropagation();
+      logLink(a.href, 'Shield lo bloqueó: parecía una capa invisible de anuncio');
       blockPopup(a.href);
       return;
     }
@@ -249,6 +263,7 @@
       e.preventDefault();
       e.stopImmediatePropagation();
       post({ openLink: a.href, newTab: newTab, token: token });
+      logLink(a.href, newTab ? 'Shield lo abre en una pestaña nueva' : 'Shield lo abre en esta pestaña');
       opened = Date.now();
       return;
     }
